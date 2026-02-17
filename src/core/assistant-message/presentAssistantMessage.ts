@@ -35,8 +35,12 @@ import { runSlashCommandTool } from "../tools/RunSlashCommandTool"
 import { skillTool } from "../tools/SkillTool"
 import { generateImageTool } from "../tools/GenerateImageTool"
 import { applyDiffTool as applyDiffToolClass } from "../tools/ApplyDiffTool"
+import { selectActiveIntentTool } from "../tools/SelectActiveIntentTool"
 import { isValidToolName, validateToolUse } from "../tools/validateToolUse"
 import { codebaseSearchTool } from "../tools/CodebaseSearchTool"
+
+import { HookEngine } from "../../hooks/HookEngine"
+import { ContextInjectorHook } from "../../hooks/ContextInjectorHook"
 
 import { formatResponse } from "../prompts/responses"
 import { sanitizeToolUseId } from "../../utils/tool-id"
@@ -70,6 +74,10 @@ export async function presentAssistantMessage(cline: Task) {
 
 	cline.presentAssistantMessageLocked = true
 	cline.presentAssistantMessageHasPendingUpdates = false
+
+	// Initialize hook engine for intent-driven development
+	const hookEngine = new HookEngine()
+	hookEngine.registerHook(new ContextInjectorHook())
 
 	if (cline.currentStreamingContentIndex >= cline.assistantMessageContent.length) {
 		// This may happen if the last content block was completed before
@@ -675,13 +683,50 @@ export async function presentAssistantMessage(cline: Task) {
 				}
 			}
 
+			// Helper function to execute tool with hooks
+			const executeToolWithHooks = async (toolHandler: () => Promise<void>) => {
+				// Execute pre-hooks
+				const preHookResult = await hookEngine.executePreHooks(cline, block as ToolUse)
+
+				if (!preHookResult.shouldProceed) {
+					// Hook blocked execution
+					pushToolResult(
+						formatResponse.toolError(preHookResult.errorMessage || "Tool execution blocked by hook"),
+					)
+					return
+				}
+
+				// Inject context if provided by hooks
+				if (preHookResult.injectedContext) {
+					// Add the injected context to the conversation
+					await cline.say("text", `Context injected by hook:\n${preHookResult.injectedContext}`)
+				}
+
+				// Execute the tool
+				await toolHandler()
+
+				// Execute post-hooks (we don't have any yet for Phase 1, but structure is ready)
+				// await hookEngine.executePostHooks(cline, block as ToolUse, toolResult)
+			}
+
 			switch (block.name) {
+				case "select_active_intent":
+					await executeToolWithHooks(async () => {
+						await selectActiveIntentTool.handle(cline, block as ToolUse<"select_active_intent">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+						})
+					})
+					break
 				case "write_to_file":
-					await checkpointSaveAndMark(cline)
-					await writeToFileTool.handle(cline, block as ToolUse<"write_to_file">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await writeToFileTool.handle(cline, block as ToolUse<"write_to_file">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+						})
 					})
 					break
 				case "update_todo_list":
