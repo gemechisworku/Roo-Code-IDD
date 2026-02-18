@@ -1,0 +1,46 @@
+active_intents:
+  - id: "INT-001"
+    name: "JWT Authentication Migration"
+    status: "IN_PROGRESS"
+    # Formal Scope Definition (Crucial for Parallelism)
+    owned_scope:
+      - "src/auth/**"
+      - "src/middleware/jwt.ts"
+    constraints:
+      - "Must not use external auth providers"
+      - "Must maintain backward compatibility with Basic Auth"
+    # The "Definition of Done"
+    acceptance_criteria:
+      - "Unit tests in tests/auth/ pass"
+      - "Integration tests pass"
+      - "No breaking changes to existing API"
+
+  - id: "INT-002"
+    name: "User Profile API Enhancement"
+    status: "PENDING"
+    owned_scope:
+      - "src/api/user/**"
+      - "src/models/User.ts"
+    constraints:
+      - "Must support GDPR compliance"
+      - "Must include proper input validation"
+      - "Must maintain existing performance benchmarks"
+    acceptance_criteria:
+      - "All user profile endpoints return correct data"
+      - "GDPR compliance audit passes"
+      - "Performance tests meet SLA"
+
+  - id: "INT-003"
+    name: "Database Connection Pooling"
+    status: "PENDING"
+    owned_scope:
+      - "src/database/**"
+      - "src/config/database.ts"
+    constraints:
+      - "Must support connection pooling"
+      - "Must handle connection failures gracefully"
+      - "Must not break existing transaction logic"
+    acceptance_criteria:
+      - "Connection pool metrics show improvement"
+      - "Load tests pass with increased concurrency"
+      - "No connection leaks detected"

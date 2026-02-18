@@ -35,8 +35,14 @@ import { runSlashCommandTool } from "../tools/RunSlashCommandTool"
 import { skillTool } from "../tools/SkillTool"
 import { generateImageTool } from "../tools/GenerateImageTool"
 import { applyDiffTool as applyDiffToolClass } from "../tools/ApplyDiffTool"
+import { selectActiveIntentTool } from "../tools/SelectActiveIntentTool"
 import { isValidToolName, validateToolUse } from "../tools/validateToolUse"
 import { codebaseSearchTool } from "../tools/CodebaseSearchTool"
+
+import { HookEngine } from "../../hooks/HookEngine"
+import { ContextInjectorHook } from "../../hooks/ContextInjectorHook"
+import { ScopeEnforcementHook } from "../../hooks/ScopeEnforcementHook"
+import { TraceWriterHook } from "../../hooks/TraceWriterHook"
 
 import { formatResponse } from "../prompts/responses"
 import { sanitizeToolUseId } from "../../utils/tool-id"
@@ -70,6 +76,14 @@ export async function presentAssistantMessage(cline: Task) {
 
 	cline.presentAssistantMessageLocked = true
 	cline.presentAssistantMessageHasPendingUpdates = false
+
+	// Initialize hook engine for intent-driven development
+	const hookEngine = new HookEngine()
+	hookEngine.registerHook(new ContextInjectorHook())
+	// Phase 2: enforce scope and authorization boundary before destructive tools
+	hookEngine.registerHook(new ScopeEnforcementHook())
+	// Phase 3: simple trace writer to append intent-aware trace entries after mutating tools
+	hookEngine.registerHook(new TraceWriterHook())
 
 	if (cline.currentStreamingContentIndex >= cline.assistantMessageContent.length) {
 		// This may happen if the last content block was completed before
@@ -659,12 +673,8 @@ export async function presentAssistantMessage(cline: Task) {
 							cline.taskId,
 							cline.consecutiveMistakeCount,
 							cline.consecutiveMistakeLimit,
-							"tool_repetition",
-							cline.apiConfiguration.apiProvider,
-							cline.api.getModel().id,
 						),
 					)
-
 					// Return tool result message about the repetition
 					pushToolResult(
 						formatResponse.toolError(
@@ -675,13 +685,54 @@ export async function presentAssistantMessage(cline: Task) {
 				}
 			}
 
+			// Helper function to execute tool with hooks
+			const executeToolWithHooks = async (toolHandler: () => Promise<void>) => {
+				// Execute pre-hooks
+				const preHookResult = await hookEngine.executePreHooks(cline, block as ToolUse)
+
+				if (!preHookResult.shouldProceed) {
+					// Hook blocked execution
+					pushToolResult(
+						formatResponse.toolError(preHookResult.errorMessage || "Tool execution blocked by hook"),
+					)
+					return
+				}
+
+				// Inject context if provided by hooks
+				if (preHookResult.injectedContext) {
+					// Add the injected context to the conversation
+					await cline.say("text", `Context injected by hook:\n${preHookResult.injectedContext}`)
+				}
+
+				// Execute the tool
+				await toolHandler()
+
+				// Execute post-hooks
+				try {
+					await hookEngine.executePostHooks(cline, block as ToolUse, undefined)
+				} catch (postHookError) {
+					console.error("Error executing post-hooks:", postHookError)
+				}
+			}
+
 			switch (block.name) {
+				case "select_active_intent":
+					await executeToolWithHooks(async () => {
+						await selectActiveIntentTool.handle(cline, block as ToolUse<"select_active_intent">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+						})
+					})
+					break
 				case "write_to_file":
-					await checkpointSaveAndMark(cline)
-					await writeToFileTool.handle(cline, block as ToolUse<"write_to_file">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await writeToFileTool.handle(cline, block as ToolUse<"write_to_file">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+						})
 					})
 					break
 				case "update_todo_list":

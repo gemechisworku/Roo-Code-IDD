@@ -13,10 +13,11 @@ import newTask from "./new_task"
 import readCommandOutput from "./read_command_output"
 import { createReadFileTool, type ReadFileToolOptions } from "./read_file"
 import runSlashCommand from "./run_slash_command"
-import skill from "./skill"
+import searchFiles from "./search_files"
 import searchReplace from "./search_replace"
 import edit_file from "./edit_file"
-import searchFiles from "./search_files"
+import selectActiveIntent from "./select_active_intent"
+import skill from "./skill"
 import switchMode from "./switch_mode"
 import updateTodoList from "./update_todo_list"
 import writeToFile from "./write_to_file"
@@ -60,11 +61,12 @@ export function getNativeTools(options: NativeToolsOptions = {}): OpenAI.Chat.Ch
 		readCommandOutput,
 		createReadFileTool(readFileOptions),
 		runSlashCommand,
-		skill,
+		searchFiles,
 		searchReplace,
 		edit_file,
 		editTool,
-		searchFiles,
+		selectActiveIntent,
+		skill,
 		switchMode,
 		updateTodoList,
 		writeToFile,
