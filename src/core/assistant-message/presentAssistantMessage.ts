@@ -41,6 +41,8 @@ import { codebaseSearchTool } from "../tools/CodebaseSearchTool"
 
 import { HookEngine } from "../../hooks/HookEngine"
 import { ContextInjectorHook } from "../../hooks/ContextInjectorHook"
+import { ScopeEnforcementHook } from "../../hooks/ScopeEnforcementHook"
+import { TraceWriterHook } from "../../hooks/TraceWriterHook"
 
 import { formatResponse } from "../prompts/responses"
 import { sanitizeToolUseId } from "../../utils/tool-id"
@@ -78,6 +80,10 @@ export async function presentAssistantMessage(cline: Task) {
 	// Initialize hook engine for intent-driven development
 	const hookEngine = new HookEngine()
 	hookEngine.registerHook(new ContextInjectorHook())
+	// Phase 2: enforce scope and authorization boundary before destructive tools
+	hookEngine.registerHook(new ScopeEnforcementHook())
+	// Phase 3: simple trace writer to append intent-aware trace entries after mutating tools
+	hookEngine.registerHook(new TraceWriterHook())
 
 	if (cline.currentStreamingContentIndex >= cline.assistantMessageContent.length) {
 		// This may happen if the last content block was completed before
@@ -667,12 +673,8 @@ export async function presentAssistantMessage(cline: Task) {
 							cline.taskId,
 							cline.consecutiveMistakeCount,
 							cline.consecutiveMistakeLimit,
-							"tool_repetition",
-							cline.apiConfiguration.apiProvider,
-							cline.api.getModel().id,
 						),
 					)
-
 					// Return tool result message about the repetition
 					pushToolResult(
 						formatResponse.toolError(
@@ -705,8 +707,12 @@ export async function presentAssistantMessage(cline: Task) {
 				// Execute the tool
 				await toolHandler()
 
-				// Execute post-hooks (we don't have any yet for Phase 1, but structure is ready)
-				// await hookEngine.executePostHooks(cline, block as ToolUse, toolResult)
+				// Execute post-hooks
+				try {
+					await hookEngine.executePostHooks(cline, block as ToolUse, undefined)
+				} catch (postHookError) {
+					console.error("Error executing post-hooks:", postHookError)
+				}
 			}
 
 			switch (block.name) {
