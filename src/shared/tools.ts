@@ -58,6 +58,8 @@ export const toolParamNames = [
 	"todos",
 	"prompt",
 	"image",
+	"intent_id",
+	"mutation_class",
 	// read_file parameters (native protocol)
 	"operations", // search_and_replace parameter for multiple operations
 	"patch", // apply_patch parameter
@@ -94,12 +96,39 @@ export type NativeToolArgs = {
 	read_command_output: { artifact_id: string; search?: string; offset?: number; limit?: number }
 	attempt_completion: { result: string }
 	execute_command: { command: string; cwd?: string }
-	apply_diff: { path: string; diff: string }
-	edit: { file_path: string; old_string: string; new_string: string; replace_all?: boolean }
-	search_and_replace: { file_path: string; old_string: string; new_string: string; replace_all?: boolean }
-	search_replace: { file_path: string; old_string: string; new_string: string }
-	edit_file: { file_path: string; old_string: string; new_string: string; expected_replacements?: number }
-	apply_patch: { patch: string }
+	apply_diff: { path: string; diff: string; intent_id?: string; mutation_class?: string }
+	edit: {
+		file_path: string
+		old_string: string
+		new_string: string
+		replace_all?: boolean
+		intent_id?: string
+		mutation_class?: string
+	}
+	search_and_replace: {
+		file_path: string
+		old_string: string
+		new_string: string
+		replace_all?: boolean
+		intent_id?: string
+		mutation_class?: string
+	}
+	search_replace: {
+		file_path: string
+		old_string: string
+		new_string: string
+		intent_id?: string
+		mutation_class?: string
+	}
+	edit_file: {
+		file_path: string
+		old_string: string
+		new_string: string
+		expected_replacements?: number
+		intent_id?: string
+		mutation_class?: string
+	}
+	apply_patch: { patch: string; intent_id?: string; mutation_class?: string }
 	list_files: { path: string; recursive?: boolean }
 	new_task: { mode: string; message: string; todos?: string }
 	ask_followup_question: {
@@ -107,14 +136,14 @@ export type NativeToolArgs = {
 		follow_up: Array<{ text: string; mode?: string }>
 	}
 	codebase_search: { query: string; path?: string }
-	generate_image: GenerateImageParams
+	generate_image: GenerateImageParams & { intent_id?: string; mutation_class?: string }
 	run_slash_command: { command: string; args?: string }
 	skill: { skill: string; args?: string }
 	search_files: { path: string; regex: string; file_pattern?: string | null }
 	switch_mode: { mode_slug: string; reason: string }
 	update_todo_list: { todos: string }
 	use_mcp_tool: { server_name: string; tool_name: string; arguments?: Record<string, unknown> }
-	write_to_file: { path: string; content: string }
+	write_to_file: { path: string; content: string; intent_id?: string; mutation_class?: string }
 	select_active_intent: { intent_id: string }
 	// Add more tools as they are migrated to native protocol
 }
@@ -323,6 +352,7 @@ export const ALWAYS_AVAILABLE_TOOLS: ToolName[] = [
 	"update_todo_list",
 	"run_slash_command",
 	"skill",
+	"select_active_intent",
 ] as const
 
 /**

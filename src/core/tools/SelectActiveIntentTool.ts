@@ -145,7 +145,7 @@ ${selectedIntent.acceptance_criteria.map((criteria) => `  <criteria>${criteria}<
 </acceptance_criteria>
 </intent_specification>
 
-<reief_history>
+<brief_history>
 ${
 	relatedTraces.length > 0
 		? relatedTraces

@@ -743,44 +743,54 @@ export async function presentAssistantMessage(cline: Task) {
 					})
 					break
 				case "apply_diff":
-					await checkpointSaveAndMark(cline)
-					await applyDiffToolClass.handle(cline, block as ToolUse<"apply_diff">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await applyDiffToolClass.handle(cline, block as ToolUse<"apply_diff">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+						})
 					})
 					break
 				case "edit":
 				case "search_and_replace":
-					await checkpointSaveAndMark(cline)
-					await editTool.handle(cline, block as ToolUse<"edit">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await editTool.handle(cline, block as ToolUse<"edit">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+						})
 					})
 					break
 				case "search_replace":
-					await checkpointSaveAndMark(cline)
-					await searchReplaceTool.handle(cline, block as ToolUse<"search_replace">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await searchReplaceTool.handle(cline, block as ToolUse<"search_replace">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+						})
 					})
 					break
 				case "edit_file":
-					await checkpointSaveAndMark(cline)
-					await editFileTool.handle(cline, block as ToolUse<"edit_file">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await editFileTool.handle(cline, block as ToolUse<"edit_file">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+						})
 					})
 					break
 				case "apply_patch":
-					await checkpointSaveAndMark(cline)
-					await applyPatchTool.handle(cline, block as ToolUse<"apply_patch">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await applyPatchTool.handle(cline, block as ToolUse<"apply_patch">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+						})
 					})
 					break
 				case "read_file":
@@ -813,10 +823,12 @@ export async function presentAssistantMessage(cline: Task) {
 					})
 					break
 				case "execute_command":
-					await executeCommandTool.handle(cline, block as ToolUse<"execute_command">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await executeCommandTool.handle(cline, block as ToolUse<"execute_command">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+						})
 					})
 					break
 				case "read_command_output":
@@ -893,11 +905,13 @@ export async function presentAssistantMessage(cline: Task) {
 					})
 					break
 				case "generate_image":
-					await checkpointSaveAndMark(cline)
-					await generateImageTool.handle(cline, block as ToolUse<"generate_image">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await generateImageTool.handle(cline, block as ToolUse<"generate_image">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+						})
 					})
 					break
 				default: {

@@ -1,10 +1,11 @@
 import path from "path"
 import fs from "fs/promises"
+import ignore from "ignore"
 
 import type { ToolUse } from "../shared/tools"
 import type { Task } from "../core/task/Task"
 import type { PreToolHook, PreHookResult } from "./types"
-import { isDestructiveTool } from "./ToolClassifier"
+import { isDestructiveTool, isMutatingTool } from "./ToolClassifier"
 
 /**
  * Scope Enforcement Hook
@@ -51,22 +52,47 @@ export class ScopeEnforcementHook implements PreToolHook {
 			// ignore missing file
 		}
 
-		// Special handling: execute_command requires explicit approval via UI
-		if (toolUse.name === "execute_command") {
-			const cmd = (toolUse.nativeArgs as any)?.command || (toolUse.params as any)?.command
-			const prompt = `The agent requests to run command: ${cmd}. Approve?`
-			const { response } = await task.ask("tool", prompt)
-			if (response !== "yesButtonClicked") {
+		// Metadata enforcement for mutating tools
+		if (isMutatingTool(toolUse.name)) {
+			const metadata = this.getMutationMetadata(toolUse)
+			const missing: string[] = []
+			if (!metadata.intent_id) missing.push("intent_id")
+			if (!metadata.mutation_class) missing.push("mutation_class")
+
+			if (missing.length > 0) {
 				const err = {
-					error_type: "command_not_authorized",
-					code: "CMD-001",
+					error_type: "missing_metadata",
+					code: "REQ-003",
 					intent_id: activeIntent.id,
-					command: cmd,
-					message: "User denied executing command",
+					tool: toolUse.name,
+					missing,
+					message: "Mutation metadata is required for workspace modifications",
 				}
 				return { shouldProceed: false, errorMessage: JSON.stringify(err) }
 			}
-			return { shouldProceed: true }
+
+			if (metadata.intent_id !== activeIntent.id) {
+				const err = {
+					error_type: "intent_mismatch",
+					code: "REQ-004",
+					intent_id: activeIntent.id,
+					provided_intent_id: metadata.intent_id,
+					message: "Provided intent_id does not match active intent",
+				}
+				return { shouldProceed: false, errorMessage: JSON.stringify(err) }
+			}
+
+			const allowed = new Set(["AST_REFACTOR", "INTENT_EVOLUTION"])
+			if (!allowed.has(metadata.mutation_class)) {
+				const err = {
+					error_type: "invalid_metadata",
+					code: "REQ-005",
+					intent_id: activeIntent.id,
+					mutation_class: metadata.mutation_class,
+					message: "mutation_class must be AST_REFACTOR or INTENT_EVOLUTION",
+				}
+				return { shouldProceed: false, errorMessage: JSON.stringify(err) }
+			}
 		}
 
 		// Extract paths targeted by the tool
@@ -96,9 +122,9 @@ export class ScopeEnforcementHook implements PreToolHook {
 		// Validate each target path is within an owned scope
 		for (const p of targetPaths) {
 			const absTarget = path.resolve(task.cwd, p)
+			const relTarget = path.relative(task.cwd, absTarget).toPosix()
 			const allowed = ownedScope.some((root) => {
-				const absRoot = path.resolve(task.cwd, root)
-				return absTarget === absRoot || absTarget.startsWith(absRoot + path.sep)
+				return this.matchesScope(root, absTarget, relTarget, task.cwd)
 			})
 
 			if (!allowed) {
@@ -162,5 +188,27 @@ export class ScopeEnforcementHook implements PreToolHook {
 
 		// Fallback: check activeIntent.selectedAt or id and attempt to read from disk would be done by ContextInjectorHook earlier.
 		return []
+	}
+
+	private getMutationMetadata(toolUse: ToolUse): { intent_id?: string; mutation_class?: string } {
+		const fromNative = (toolUse.nativeArgs as any) || {}
+		const fromParams = (toolUse.params as any) || {}
+		return {
+			intent_id: fromNative.intent_id ?? fromParams.intent_id,
+			mutation_class: fromNative.mutation_class ?? fromParams.mutation_class,
+		}
+	}
+
+	private matchesScope(scope: string, absTarget: string, relTarget: string, cwd: string): boolean {
+		const scopePosix = scope.toPosix()
+		const hasGlob = /[*?[\]]/.test(scopePosix)
+
+		if (hasGlob) {
+			const ig = ignore().add(scopePosix)
+			return ig.ignores(relTarget)
+		}
+
+		const absRoot = path.resolve(cwd, scope)
+		return absTarget === absRoot || absTarget.startsWith(absRoot + path.sep)
 	}
 }
