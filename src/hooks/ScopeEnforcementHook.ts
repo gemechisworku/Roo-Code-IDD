@@ -105,7 +105,22 @@ export class ScopeEnforcementHook implements PreToolHook {
 					? (task as any).providerRef.deref()?.log?.bind((task as any).providerRef.deref())
 					: undefined
 			const log = logger ?? ((message: string) => console.log(message))
-			const classification = classifyCommandWithDebug(command, task.cwd, log)
+			if (toolUse.partial) {
+				log("[command-classifier] skipping classification for partial execute_command payload")
+				return { shouldProceed: true }
+			}
+
+			if (!command.trim()) {
+				log("[command-classifier] skipping classification for empty execute_command payload")
+				return { shouldProceed: true }
+			}
+
+			const classificationTarget = this.unwrapShellCommand(command)
+			if (classificationTarget !== command) {
+				log(`[command-classifier] unwrapped="` + classificationTarget + `"`)
+			}
+
+			const classification = classifyCommandWithDebug(classificationTarget, task.cwd, log)
 
 			if (classification === "safe") {
 				this.recordDecision(task, {
@@ -307,6 +322,20 @@ export class ScopeEnforcementHook implements PreToolHook {
 	private markCommandApproved(task: Task, command: string): void {
 		const approvals = ((task as any).approvedCommands ??= new Set<string>()) as Set<string>
 		approvals.add(command)
+	}
+
+	private unwrapShellCommand(command: string): string {
+		const trimmed = command.trim()
+		const match = trimmed.match(/^(?:powershell|pwsh)(?:\.exe)?\b[^\S\r\n]*-command[^\S\r\n]+(.+)$/i)
+		if (!match) return trimmed
+
+		let inner = match[1].trim()
+		// Strip surrounding quotes if present
+		if ((inner.startsWith('"') && inner.endsWith('"')) || (inner.startsWith("'") && inner.endsWith("'"))) {
+			inner = inner.slice(1, -1)
+		}
+
+		return inner.trim()
 	}
 
 	private recordDecision(
