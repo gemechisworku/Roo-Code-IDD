@@ -11,6 +11,7 @@ import { isDestructiveTool, isMutatingTool } from "./ToolClassifier"
 import { classifyCommandWithDebug, type CommandSafety } from "./CommandClassifier"
 import { serializeHookError } from "./hookErrors"
 import { unescapeHtmlEntities } from "../utils/text-normalization"
+import { extractTargetPaths } from "./traceUtils"
 
 /**
  * Scope Enforcement Hook
@@ -24,6 +25,11 @@ export class ScopeEnforcementHook implements PreToolHook {
 
 	async execute(task: Task, toolUse: ToolUse): Promise<PreHookResult> {
 		const cwd = task.cwd
+
+		// Skip enforcement for partial tool calls to avoid prompting on incomplete args.
+		if (toolUse.partial) {
+			return { shouldProceed: true }
+		}
 
 		// Only apply enforcement for classified destructive tools
 		if (!isDestructiveTool(toolUse.name)) {
@@ -249,23 +255,7 @@ export class ScopeEnforcementHook implements PreToolHook {
 	}
 
 	private extractPathsFromToolUse(toolUse: ToolUse): string[] {
-		const paths: string[] = []
-
-		const tryAdd = (p: any) => {
-			if (!p) return
-			if (Array.isArray(p)) p.forEach((x) => tryAdd(x))
-			else if (typeof p === "string") paths.push(p)
-			else if (typeof p === "object") {
-				// try common fields
-				if (p.path) tryAdd(p.path)
-				if (p.file_path) tryAdd(p.file_path)
-				if (p.files) tryAdd(p.files)
-			}
-		}
-
-		tryAdd((toolUse.nativeArgs as any) || toolUse.params)
-
-		return paths.map((p) => String(p))
+		return extractTargetPaths(toolUse)
 	}
 
 	private getOwnedScopeFromTask(activeIntent: any): string[] {

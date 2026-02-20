@@ -6,9 +6,12 @@ import type { ToolUse } from "../shared/tools"
 import type { Task } from "../core/task/Task"
 import type { PostToolHook, PostHookResult } from "./types"
 import { computeAddedRanges, extractTargetPaths, hashContent, isBinaryBuffer } from "./traceUtils"
+import { appendWithLock } from "./appendWithLock"
 
 type SnapshotEntry = {
 	before: string | null
+	existed?: boolean
+	binary?: boolean
 }
 
 type SnapshotStore = Map<string, Map<string, SnapshotEntry>>
@@ -173,7 +176,7 @@ export class TraceWriterHook implements PostToolHook {
 			}
 
 			const traceFile = path.join(orchestrationDir, "agent_trace.jsonl")
-			await fs.appendFile(traceFile, JSON.stringify(entry) + "\n", "utf-8")
+			await appendWithLock(traceFile, JSON.stringify(entry) + "\n")
 
 			return { success: true, sideEffects: ["wrote_trace_entry"] }
 		} catch (error: any) {

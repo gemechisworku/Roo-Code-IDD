@@ -15,6 +15,7 @@ import { BaseTool, ToolCallbacks } from "./BaseTool"
 import type { ToolUse } from "../../shared/tools"
 import { parsePatch, ParseError, processAllHunks } from "./apply-patch"
 import type { ApplyPatchFileChange } from "./apply-patch"
+import { checkOptimisticLock } from "../../hooks/optimisticLock"
 
 interface ApplyPatchParams {
 	patch: string
@@ -148,6 +149,14 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 	): Promise<void> {
 		const { askApproval, pushToolResult } = callbacks
 
+		const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+		if (staleError) {
+			task.recordToolError("apply_patch", staleError)
+			task.didToolFailInCurrentTurn = true
+			pushToolResult(formatResponse.toolError(staleError))
+			return
+		}
+
 		// Check if file already exists
 		const fileExists = await fileExistsAtPath(absolutePath)
 		if (fileExists) {
@@ -239,6 +248,14 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 	): Promise<void> {
 		const { askApproval, pushToolResult } = callbacks
 
+		const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+		if (staleError) {
+			task.recordToolError("apply_patch", staleError)
+			task.didToolFailInCurrentTurn = true
+			pushToolResult(formatResponse.toolError(staleError))
+			return
+		}
+
 		// Check if file exists
 		const fileExists = await fileExistsAtPath(absolutePath)
 		if (!fileExists) {
@@ -296,6 +313,14 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 		isWriteProtected: boolean,
 	): Promise<void> {
 		const { askApproval, pushToolResult } = callbacks
+
+		const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+		if (staleError) {
+			task.recordToolError("apply_patch", staleError)
+			task.didToolFailInCurrentTurn = true
+			pushToolResult(formatResponse.toolError(staleError))
+			return
+		}
 
 		// Check if file exists
 		const fileExists = await fileExistsAtPath(absolutePath)
@@ -371,6 +396,15 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 
 		// Handle file move if specified
 		if (change.movePath) {
+			const moveStaleError = await checkOptimisticLock(task, callbacks.toolCallId, change.movePath, this.name)
+			if (moveStaleError) {
+				task.recordToolError("apply_patch", moveStaleError)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(moveStaleError))
+				await task.diffViewProvider.reset()
+				return
+			}
+
 			const moveAbsolutePath = path.resolve(task.cwd, change.movePath)
 
 			// Validate destination path access permissions

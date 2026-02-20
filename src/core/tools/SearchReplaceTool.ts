@@ -12,6 +12,7 @@ import { fileExistsAtPath } from "../../utils/fs"
 import { EXPERIMENT_IDS, experiments } from "../../shared/experiments"
 import { sanitizeUnifiedDiff, computeDiffStats } from "../diff/stats"
 import type { ToolUse } from "../../shared/tools"
+import { checkOptimisticLock } from "../../hooks/optimisticLock"
 
 import { BaseTool, ToolCallbacks } from "./BaseTool"
 
@@ -89,6 +90,14 @@ export class SearchReplaceTool extends BaseTool<"search_replace"> {
 				const errorMessage = `File not found: ${relPath}. Cannot perform search and replace on a non-existent file.`
 				await task.say("error", errorMessage)
 				pushToolResult(formatResponse.toolError(errorMessage))
+				return
+			}
+
+			const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+			if (staleError) {
+				task.recordToolError("search_replace", staleError)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(staleError))
 				return
 			}
 

@@ -44,6 +44,7 @@ import { ContextInjectorHook } from "../../hooks/ContextInjectorHook"
 import { ScopeEnforcementHook } from "../../hooks/ScopeEnforcementHook"
 import { TraceSnapshotHook } from "../../hooks/TraceSnapshotHook"
 import { TraceWriterHook } from "../../hooks/TraceWriterHook"
+import { LessonsLearnedHook } from "../../hooks/LessonsLearnedHook"
 
 import { formatResponse } from "../prompts/responses"
 import { sanitizeToolUseId } from "../../utils/tool-id"
@@ -86,6 +87,8 @@ export async function presentAssistantMessage(cline: Task) {
 	// Phase 3: capture pre-mutation snapshots and append intent-aware trace entries after mutating tools
 	hookEngine.registerHook(new TraceSnapshotHook())
 	hookEngine.registerHook(new TraceWriterHook())
+	// Phase 4: append lessons learned on verification failures
+	hookEngine.registerHook(new LessonsLearnedHook())
 
 	if (cline.currentStreamingContentIndex >= cline.assistantMessageContent.length) {
 		// This may happen if the last content block was completed before
@@ -289,6 +292,7 @@ export async function presentAssistantMessage(cline: Task) {
 				askApproval,
 				handleError,
 				pushToolResult,
+				toolCallId,
 			})
 			break
 		}
@@ -724,6 +728,7 @@ export async function presentAssistantMessage(cline: Task) {
 							askApproval,
 							handleError,
 							pushToolResult,
+							toolCallId,
 						})
 					})
 					break
@@ -734,6 +739,7 @@ export async function presentAssistantMessage(cline: Task) {
 							askApproval,
 							handleError,
 							pushToolResult,
+							toolCallId,
 						})
 					})
 					break
@@ -742,6 +748,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "apply_diff":
@@ -751,6 +758,7 @@ export async function presentAssistantMessage(cline: Task) {
 							askApproval,
 							handleError,
 							pushToolResult,
+							toolCallId,
 						})
 					})
 					break
@@ -762,6 +770,7 @@ export async function presentAssistantMessage(cline: Task) {
 							askApproval,
 							handleError,
 							pushToolResult,
+							toolCallId,
 						})
 					})
 					break
@@ -772,6 +781,7 @@ export async function presentAssistantMessage(cline: Task) {
 							askApproval,
 							handleError,
 							pushToolResult,
+							toolCallId,
 						})
 					})
 					break
@@ -782,6 +792,7 @@ export async function presentAssistantMessage(cline: Task) {
 							askApproval,
 							handleError,
 							pushToolResult,
+							toolCallId,
 						})
 					})
 					break
@@ -792,6 +803,7 @@ export async function presentAssistantMessage(cline: Task) {
 							askApproval,
 							handleError,
 							pushToolResult,
+							toolCallId,
 						})
 					})
 					break
@@ -801,6 +813,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "list_files":
@@ -808,6 +821,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "codebase_search":
@@ -815,6 +829,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "search_files":
@@ -822,6 +837,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "execute_command":
@@ -830,6 +846,7 @@ export async function presentAssistantMessage(cline: Task) {
 							askApproval,
 							handleError,
 							pushToolResult,
+							toolCallId,
 						})
 					})
 					break
@@ -838,6 +855,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "use_mcp_tool":
@@ -845,6 +863,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "access_mcp_resource":
@@ -852,6 +871,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "ask_followup_question":
@@ -859,6 +879,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "switch_mode":
@@ -866,6 +887,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "new_task":
@@ -897,6 +919,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "skill":
@@ -904,6 +927,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "generate_image":
@@ -913,6 +937,7 @@ export async function presentAssistantMessage(cline: Task) {
 							askApproval,
 							handleError,
 							pushToolResult,
+							toolCallId,
 						})
 					})
 					break

@@ -18,6 +18,7 @@ import { RooHandler } from "../../api/providers/roo"
 import { BaseTool, ToolCallbacks } from "./BaseTool"
 import type { ToolUse } from "../../shared/tools"
 import { t } from "../../i18n"
+import { checkOptimisticLock } from "../../hooks/optimisticLock"
 
 export class GenerateImageTool extends BaseTool<"generate_image"> {
 	readonly name = "generate_image" as const
@@ -230,6 +231,14 @@ export class GenerateImageTool extends BaseTool<"generate_image"> {
 			let finalPath = relPath
 			if (!finalPath.match(/\.(png|jpg|jpeg)$/i)) {
 				finalPath = `${finalPath}.${imageFormat === "jpeg" ? "jpg" : imageFormat}`
+			}
+
+			const staleError = await checkOptimisticLock(task, callbacks.toolCallId, finalPath, this.name)
+			if (staleError) {
+				task.recordToolError("generate_image", staleError)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(staleError))
+				return
 			}
 
 			const imageBuffer = Buffer.from(base64Data, "base64")

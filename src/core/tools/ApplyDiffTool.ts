@@ -13,6 +13,7 @@ import { unescapeHtmlEntities } from "../../utils/text-normalization"
 import { EXPERIMENT_IDS, experiments } from "../../shared/experiments"
 import { computeDiffStats, sanitizeUnifiedDiff } from "../diff/stats"
 import type { ToolUse } from "../../shared/tools"
+import { checkOptimisticLock } from "../../hooks/optimisticLock"
 
 import { BaseTool, ToolCallbacks } from "./BaseTool"
 
@@ -65,6 +66,14 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 				await task.say("error", formattedError)
 				task.didToolFailInCurrentTurn = true
 				pushToolResult(formattedError)
+				return
+			}
+
+			const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+			if (staleError) {
+				task.recordToolError("apply_diff", staleError)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(staleError))
 				return
 			}
 

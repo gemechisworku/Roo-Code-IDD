@@ -8,6 +8,8 @@ import { extractTargetPaths, isBinaryBuffer } from "./traceUtils"
 
 type SnapshotEntry = {
 	before: string | null
+	existed: boolean
+	binary: boolean
 }
 
 type SnapshotStore = Map<string, Map<string, SnapshotEntry>>
@@ -57,12 +59,12 @@ export class TraceSnapshotHook implements PreToolHook {
 				const absPath = path.resolve(task.cwd, relPath)
 				const buffer = await fs.readFile(absPath)
 				if (isBinaryBuffer(buffer)) {
-					snapshot.set(relPath, { before: null })
+					snapshot.set(relPath, { before: null, existed: true, binary: true })
 				} else {
-					snapshot.set(relPath, { before: buffer.toString("utf8") })
+					snapshot.set(relPath, { before: buffer.toString("utf8"), existed: true, binary: false })
 				}
 			} catch {
-				snapshot.set(relPath, { before: null })
+				snapshot.set(relPath, { before: null, existed: false, binary: false })
 			}
 		}
 

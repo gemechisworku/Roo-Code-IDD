@@ -15,6 +15,7 @@ import { unescapeHtmlEntities } from "../../utils/text-normalization"
 import { EXPERIMENT_IDS, experiments } from "../../shared/experiments"
 import { convertNewFileToUnifiedDiff, computeDiffStats, sanitizeUnifiedDiff } from "../diff/stats"
 import type { ToolUse } from "../../shared/tools"
+import { checkOptimisticLock } from "../../hooks/optimisticLock"
 
 import { BaseTool, ToolCallbacks } from "./BaseTool"
 
@@ -52,6 +53,14 @@ export class WriteToFileTool extends BaseTool<"write_to_file"> {
 		if (!accessAllowed) {
 			await task.say("rooignore_error", relPath)
 			pushToolResult(formatResponse.rooIgnoreError(relPath))
+			return
+		}
+
+		const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+		if (staleError) {
+			task.recordToolError("write_to_file", staleError)
+			task.didToolFailInCurrentTurn = true
+			pushToolResult(formatResponse.toolError(staleError))
 			return
 		}
 

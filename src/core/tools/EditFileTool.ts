@@ -12,6 +12,7 @@ import { fileExistsAtPath } from "../../utils/fs"
 import { EXPERIMENT_IDS, experiments } from "../../shared/experiments"
 import { sanitizeUnifiedDiff, computeDiffStats } from "../diff/stats"
 import type { ToolUse } from "../../shared/tools"
+import { checkOptimisticLock } from "../../hooks/optimisticLock"
 
 import { BaseTool, ToolCallbacks } from "./BaseTool"
 
@@ -222,6 +223,14 @@ export class EditFileTool extends BaseTool<"edit_file"> {
 
 			const absolutePath = path.resolve(task.cwd, relPath)
 			const fileExists = await fileExistsAtPath(absolutePath)
+
+			const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+			if (staleError) {
+				task.recordToolError("edit_file", staleError)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(staleError))
+				return
+			}
 
 			let currentContent: string | null = null
 			let currentContentLF: string | null = null
