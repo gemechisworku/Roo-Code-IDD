@@ -1,11 +1,16 @@
 import path from "path"
+import { toPosixPath } from "../utils/path"
 import fs from "fs/promises"
 import ignore from "ignore"
+import * as vscode from "vscode"
 
 import type { ToolUse } from "../shared/tools"
 import type { Task } from "../core/task/Task"
 import type { PreToolHook, PreHookResult } from "./types"
 import { isDestructiveTool, isMutatingTool } from "./ToolClassifier"
+import { classifyCommand, type CommandSafety } from "./CommandClassifier"
+import { serializeHookError } from "./hookErrors"
+import { unescapeHtmlEntities } from "../utils/text-normalization"
 
 /**
  * Scope Enforcement Hook
@@ -65,10 +70,9 @@ export class ScopeEnforcementHook implements PreToolHook {
 					code: "REQ-003",
 					intent_id: activeIntent.id,
 					tool: toolUse.name,
-					missing,
 					message: "Mutation metadata is required for workspace modifications",
 				}
-				return { shouldProceed: false, errorMessage: JSON.stringify(err) }
+				return { shouldProceed: false, errorMessage: serializeHookError(err, { missing }) }
 			}
 
 			if (metadata.intent_id !== activeIntent.id) {
@@ -76,34 +80,113 @@ export class ScopeEnforcementHook implements PreToolHook {
 					error_type: "intent_mismatch",
 					code: "REQ-004",
 					intent_id: activeIntent.id,
-					provided_intent_id: metadata.intent_id,
 					message: "Provided intent_id does not match active intent",
 				}
-				return { shouldProceed: false, errorMessage: JSON.stringify(err) }
+				return {
+					shouldProceed: false,
+					errorMessage: serializeHookError(err, { provided_intent_id: metadata.intent_id }),
+				}
 			}
 
+			const mutationClass = metadata.mutation_class
 			const allowed = new Set(["AST_REFACTOR", "INTENT_EVOLUTION"])
-			if (!allowed.has(metadata.mutation_class)) {
+			if (!mutationClass || !allowed.has(mutationClass)) {
 				const err = {
 					error_type: "invalid_metadata",
 					code: "REQ-005",
 					intent_id: activeIntent.id,
-					mutation_class: metadata.mutation_class,
 					message: "mutation_class must be AST_REFACTOR or INTENT_EVOLUTION",
 				}
-				return { shouldProceed: false, errorMessage: JSON.stringify(err) }
+				return {
+					shouldProceed: false,
+					errorMessage: serializeHookError(err, { mutation_class: mutationClass }),
+				}
 			}
+		}
+
+		// Special handling: execute_command classification + approval
+		if (toolUse.name === "execute_command") {
+			const cmdRaw = (toolUse.nativeArgs as any)?.command || (toolUse.params as any)?.command
+			const command = unescapeHtmlEntities(String(cmdRaw ?? ""))
+			const classification = classifyCommand(command, task.cwd)
+
+			if (classification === "safe") {
+				this.recordDecision(task, {
+					intent_id: activeIntent.id,
+					tool: toolUse.name,
+					decision: "approved",
+					reason: "safe_command",
+					command,
+					command_classification: classification,
+				})
+				this.markCommandApproved(task, command)
+				return { shouldProceed: true }
+			}
+
+			// Check persisted approvals to avoid prompting again for the same command
+			const persisted = await this.loadPersistedDecisions(task.cwd)
+			const prior = this.findMatchingApproval(
+				persisted,
+				(d) => d.tool === "execute_command" && d.command === command && d.intent_id === activeIntent.id,
+			)
+			if (prior) {
+				this.recordDecision(task, {
+					intent_id: activeIntent.id,
+					tool: toolUse.name,
+					decision: "approved",
+					reason: "reused_approval",
+					command,
+					command_classification: classification,
+				})
+				this.markCommandApproved(task, command)
+				return { shouldProceed: true }
+			}
+
+			const approved = await this.promptApproval(
+				`The agent requests to run a DESTRUCTIVE command: ${command}. Approve?`,
+			)
+
+			this.recordDecision(task, {
+				intent_id: activeIntent.id,
+				tool: toolUse.name,
+				decision: approved ? "approved" : "rejected",
+				reason: "destructive_command",
+				command,
+				command_classification: classification,
+			})
+
+			if (!approved) {
+				const err = {
+					error_type: "command_not_authorized",
+					code: "CMD-001",
+					intent_id: activeIntent.id,
+					tool: toolUse.name,
+					message: "User denied executing command",
+				}
+				return {
+					shouldProceed: false,
+					errorMessage: serializeHookError(err, { command, classification }),
+				}
+			}
+
+			this.markCommandApproved(task, command)
+			return { shouldProceed: true }
 		}
 
 		// Extract paths targeted by the tool
 		const targetPaths = this.extractPathsFromToolUse(toolUse)
 
 		if (!targetPaths || targetPaths.length === 0) {
-			const { response } = await task.ask(
-				"tool",
+			const approved = await this.promptApproval(
 				`The agent is attempting a destructive operation (${toolUse.name}) but the target files could not be determined. Approve?`,
 			)
-			if (response !== "yesButtonClicked") {
+			this.recordDecision(task, {
+				intent_id: activeIntent.id,
+				tool: toolUse.name,
+				decision: approved ? "approved" : "rejected",
+				reason: "unknown_targets",
+			})
+			if (!approved) {
 				const err = {
 					error_type: "unknown_targets",
 					code: "REQ-002",
@@ -111,7 +194,7 @@ export class ScopeEnforcementHook implements PreToolHook {
 					tool: toolUse.name,
 					message: "User denied operation with unknown targets",
 				}
-				return { shouldProceed: false, errorMessage: JSON.stringify(err) }
+				return { shouldProceed: false, errorMessage: serializeHookError(err) }
 			}
 			return { shouldProceed: true }
 		}
@@ -122,25 +205,30 @@ export class ScopeEnforcementHook implements PreToolHook {
 		// Validate each target path is within an owned scope
 		for (const p of targetPaths) {
 			const absTarget = path.resolve(task.cwd, p)
-			const relTarget = path.relative(task.cwd, absTarget).toPosix()
+			const relTarget = toPosixPath(path.relative(task.cwd, absTarget))
 			const allowed = ownedScope.some((root) => {
 				return this.matchesScope(root, absTarget, relTarget, task.cwd)
 			})
 
 			if (!allowed) {
-				const { response } = await task.ask(
-					"tool",
+				const approved = await this.promptApproval(
 					`The agent wants to modify '${p}', which is outside the intent's owned scope. Approve?`,
 				)
-				if (response !== "yesButtonClicked") {
+				this.recordDecision(task, {
+					intent_id: activeIntent.id,
+					tool: toolUse.name,
+					decision: approved ? "approved" : "rejected",
+					reason: "scope_violation",
+					targets: [p],
+				})
+				if (!approved) {
 					const err = {
 						error_type: "scope_violation",
 						code: "REQ-001",
 						intent_id: activeIntent.id,
-						filename: p,
 						message: `Intent not authorized to edit ${p}`,
 					}
-					return { shouldProceed: false, errorMessage: JSON.stringify(err) }
+					return { shouldProceed: false, errorMessage: serializeHookError(err, { filename: p }) }
 				}
 			}
 		}
@@ -199,8 +287,76 @@ export class ScopeEnforcementHook implements PreToolHook {
 		}
 	}
 
+	private async promptApproval(message: string): Promise<boolean> {
+		const result = await vscode.window.showWarningMessage(message, { modal: true }, "Approve", "Reject")
+		if (!result) return false
+		// The API may return a string or a MessageItem with a title.
+		if (typeof result === "string") return result === "Approve"
+		if ((result as any).title) return (result as any).title === "Approve"
+		return false
+	}
+
+	private markCommandApproved(task: Task, command: string): void {
+		const approvals = ((task as any).approvedCommands ??= new Set<string>()) as Set<string>
+		approvals.add(command)
+	}
+
+	private recordDecision(
+		task: Task,
+		decision: {
+			intent_id: string
+			tool: string
+			decision: "approved" | "rejected"
+			reason: string
+			targets?: string[]
+			command?: string
+			command_classification?: CommandSafety
+		},
+	): void {
+		const decisions = ((task as any).intentDecisions ??= []) as Array<any>
+		const entry = { ...decision, timestamp: new Date().toISOString() }
+		decisions.push(entry)
+
+		// Persist decision to .orchestration/intent-decisions.jsonl for audit and reuse
+		try {
+			const orchestrationDir = path.join(task.cwd, ".orchestration")
+			const outFile = path.join(orchestrationDir, "intent-decisions.jsonl")
+			// Ensure directory exists (best-effort)
+			fs.mkdir(orchestrationDir, { recursive: true }).catch(() => {})
+			fs.appendFile(outFile, JSON.stringify(entry) + "\n").catch(() => {})
+		} catch {
+			// ignore persistence errors
+		}
+	}
+
+	private async loadPersistedDecisions(cwd: string): Promise<any[]> {
+		try {
+			const orchestrationDir = path.join(cwd, ".orchestration")
+			const outFile = path.join(orchestrationDir, "intent-decisions.jsonl")
+			const content = await fs.readFile(outFile, "utf-8")
+			return content
+				.trim()
+				.split(/\r?\n/)
+				.filter(Boolean)
+				.map((l) => {
+					try {
+						return JSON.parse(l)
+					} catch {
+						return null
+					}
+				})
+				.filter(Boolean)
+		} catch {
+			return []
+		}
+	}
+
+	private findMatchingApproval(decisions: any[], predicate: (d: any) => boolean) {
+		return decisions.find((d) => d && d.decision === "approved" && predicate(d))
+	}
+
 	private matchesScope(scope: string, absTarget: string, relTarget: string, cwd: string): boolean {
-		const scopePosix = scope.toPosix()
+		const scopePosix = toPosixPath(scope)
 		const hasGlob = /[*?[\]]/.test(scopePosix)
 
 		if (hasGlob) {

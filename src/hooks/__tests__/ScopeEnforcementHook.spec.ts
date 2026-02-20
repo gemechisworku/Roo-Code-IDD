@@ -1,16 +1,28 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
 import path from "path"
+import * as vscode from "vscode"
 import { ScopeEnforcementHook } from "../ScopeEnforcementHook"
+
+vi.mock("vscode", () => ({
+	window: {
+		showWarningMessage: vi.fn(),
+	},
+}))
+
+const showWarningMessageMock = vi.mocked(vscode.window.showWarningMessage)
 
 function makeTask(overrides: any = {}) {
 	return {
 		cwd: process.cwd(),
-		ask: async (_type: string, _message?: string) => ({ response: "yesButtonClicked" }),
 		...overrides,
 	} as any
 }
 
 describe("ScopeEnforcementHook", () => {
+	beforeEach(() => {
+		showWarningMessageMock.mockReset()
+	})
+
 	it("blocks when no active intent is selected", async () => {
 		const hook = new ScopeEnforcementHook()
 		const task = makeTask({ activeIntent: undefined })
@@ -36,16 +48,17 @@ describe("ScopeEnforcementHook", () => {
 
 		const res = await hook.execute(task, toolUse)
 		expect(res.shouldProceed).toBe(true)
+		expect(showWarningMessageMock).not.toHaveBeenCalled()
 	})
 
 	it("prompts and blocks when target is outside owned scope and user denies", async () => {
+		showWarningMessageMock.mockResolvedValue({ title: "Reject" } as vscode.MessageItem)
 		const hook = new ScopeEnforcementHook()
 		const task = makeTask({
 			activeIntent: {
 				id: "i1",
 				context: `<intent_context><owned_scope><path>src</path></owned_scope></intent_context>`,
 			},
-			ask: async (_type: string, _message?: string) => ({ response: "noButtonClicked" }),
 		})
 		const toolUse: any = {
 			name: "write_to_file",
@@ -62,7 +75,22 @@ describe("ScopeEnforcementHook", () => {
 		expect(err.filename).toBe(path.join("other", "foo.ts"))
 	})
 
-	it("allows execute_command when an active intent is selected", async () => {
+	it("allows safe execute_command without approval", async () => {
+		const hook = new ScopeEnforcementHook()
+		const task = makeTask({
+			activeIntent: {
+				id: "i1",
+				context: `<intent_context><owned_scope><path>src</path></owned_scope></intent_context>`,
+			},
+		})
+		const cmdUse: any = { name: "execute_command", nativeArgs: { command: "pwd" } }
+		const res = await hook.execute(task, cmdUse)
+		expect(res.shouldProceed).toBe(true)
+		expect(showWarningMessageMock).not.toHaveBeenCalled()
+	})
+
+	it("blocks destructive execute_command when user rejects", async () => {
+		showWarningMessageMock.mockResolvedValue({ title: "Reject" } as vscode.MessageItem)
 		const hook = new ScopeEnforcementHook()
 		const task = makeTask({
 			activeIntent: {
@@ -72,7 +100,9 @@ describe("ScopeEnforcementHook", () => {
 		})
 		const cmdUse: any = { name: "execute_command", nativeArgs: { command: "rm -rf /" } }
 		const res = await hook.execute(task, cmdUse)
-		expect(res.shouldProceed).toBe(true)
+		expect(res.shouldProceed).toBe(false)
+		const err = JSON.parse(res.errorMessage as string)
+		expect(err.error_type).toBe("command_not_authorized")
 	})
 
 	it("blocks mutating tools when mutation metadata is missing", async () => {

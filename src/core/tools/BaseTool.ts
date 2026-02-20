@@ -2,6 +2,10 @@ import type { ToolName } from "@roo-code/types"
 
 import { Task } from "../task/Task"
 import type { ToolUse, HandleError, PushToolResult, AskApproval, NativeToolArgs } from "../../shared/tools"
+import { formatResponse } from "../prompts/responses"
+import { serializeHookError } from "../../hooks/hookErrors"
+import fs from "fs/promises"
+import pathModule from "path"
 
 /**
  * Callbacks passed to tool execution
@@ -125,6 +129,53 @@ export abstract class BaseTool<TName extends ToolName> {
 			return
 		}
 
+		// Special-case: if select_active_intent is called without an intent identifier,
+		// emit a non-retryable structured error and write a diagnostic snapshot. This
+		// prevents the agent from repeatedly retrying the same empty tool call.
+		if ((block as any).name === "select_active_intent") {
+			const nativeIntent = (block.nativeArgs as any)?.intent_id
+			const paramsIntent = (block.params as any)?.intent_id
+			const inputIntent = (block as any).input?.intent_id
+			if (!nativeIntent && !paramsIntent && !inputIntent) {
+				// write diagnostics (best-effort)
+				try {
+					const diagDir = pathModule.join(task.cwd, ".orchestration")
+					await fs.mkdir(diagDir, { recursive: true })
+					const out = pathModule.join(diagDir, `agent-diagnostics-${Date.now()}.json`)
+					await fs.writeFile(
+						out,
+						JSON.stringify(
+							{
+								block,
+								nativeIntent: nativeIntent || null,
+								paramsIntent: paramsIntent || null,
+								inputIntent: inputIntent || null,
+							},
+							null,
+							2,
+						),
+						"utf-8",
+					)
+				} catch {
+					// ignore diagnostics write failures
+				}
+
+				const structured = serializeHookError(
+					{
+						error_type: "missing_intent",
+						code: "HOOK-INT-002",
+						intent_id: "",
+						message: "select_active_intent called without intent_id",
+					},
+					{ tool: "select_active_intent", retryable: false },
+				)
+
+				callbacks.pushToolResult(formatResponse.toolError(structured))
+				await callbacks.handleError(`missing intent_id in select_active_intent`, new Error("Missing intent_id"))
+				return
+			}
+		}
+
 		// Native-only: obtain typed parameters from `nativeArgs`.
 		let params: ToolParams<TName>
 		try {
@@ -149,6 +200,31 @@ export abstract class BaseTool<TName extends ToolName> {
 			}
 		} catch (error) {
 			console.error(`Error parsing parameters:`, error)
+			// Increment per-tool retry counter on the task
+			const toolName = this.name as string
+			const counts = (task as any).toolRetryCounts || {}
+			const prev = counts[toolName] ?? 0
+			counts[toolName] = prev + 1
+			;(task as any).toolRetryCounts = counts
+
+			// If retries exceed limit, emit a structured tool error back to the LLM so it can recover
+			const TOOL_RETRY_LIMIT = 2
+			if (prev + 1 > TOOL_RETRY_LIMIT) {
+				const err = serializeHookError(
+					{
+						error_type: "missing_parameter",
+						code: "REQ-006",
+						intent_id: (task as any).activeIntent?.id || "",
+						message: `Tool ${toolName} failed repeatedly due to missing or invalid parameters.`,
+					},
+					{ tool: toolName },
+				)
+				// push a tool_result formatted error so the LLM can parse and self-correct
+				callbacks.pushToolResult(formatResponse.toolError(err))
+				await callbacks.handleError(`parsing ${this.name} args`, new Error(String(error)))
+				return
+			}
+
 			const errorMessage = `Failed to parse ${this.name} parameters: ${error instanceof Error ? error.message : String(error)}`
 			await callbacks.handleError(`parsing ${this.name} args`, new Error(errorMessage))
 			// Note: handleError already emits a tool_result via formatResponse.toolError in the caller.

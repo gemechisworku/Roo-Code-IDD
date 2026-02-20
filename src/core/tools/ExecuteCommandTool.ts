@@ -55,7 +55,14 @@ export class ExecuteCommandTool extends BaseTool<"execute_command"> {
 
 			task.consecutiveMistakeCount = 0
 
-			const didApprove = await askApproval("command", canonicalCommand)
+			let didApprove = false
+			const approvedCommands = ((task as any).approvedCommands ?? null) as Set<string> | null
+			if (approvedCommands?.has(canonicalCommand)) {
+				approvedCommands.delete(canonicalCommand)
+				didApprove = true
+			} else {
+				didApprove = await askApproval("command", canonicalCommand)
+			}
 
 			if (!didApprove) {
 				return

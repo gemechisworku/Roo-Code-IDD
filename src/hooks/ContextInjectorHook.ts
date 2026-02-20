@@ -19,12 +19,99 @@ export class ContextInjectorHook implements PreToolHook {
 	toolFilter = ["select_active_intent"]
 
 	async execute(task: Task, toolUse: ToolUse<"select_active_intent">): Promise<PreHookResult> {
-		const { intent_id } = (toolUse.nativeArgs as { intent_id: string }) || toolUse.params
+		// Robust extraction: check multiple possible locations where intent_id may be present
+		const nativeIntent = (toolUse.nativeArgs as any)?.intent_id
+		const paramsIntent = (toolUse.params as any)?.intent_id
+		const inputIntent = (toolUse as any).input?.intent_id
 
-		if (!intent_id) {
-			return {
-				shouldProceed: false,
-				errorMessage: "Missing intent_id parameter",
+		// Sometimes params are JSON-stringified in a single field (e.g., args, input)
+		const tryParseIntentFromParams = () => {
+			try {
+				const candidateFields = ["args", "arguments", "input", "params", "payload"]
+				for (const f of candidateFields) {
+					const val = (toolUse.params as any)?.[f] || (toolUse as any)?.[f]
+					if (!val) continue
+					if (typeof val === "string") {
+						if (val.includes("intent_id")) {
+							try {
+								const parsed = JSON.parse(val)
+								if (parsed && parsed.intent_id) return parsed.intent_id
+							} catch {
+								// fallback: try regex
+								const m = val.match(/"intent_id"\s*:\s*"([^"]+)"/)
+								if (m) return m[1]
+							}
+						}
+					} else if (typeof val === "object" && val.intent_id) {
+						return val.intent_id
+					}
+				}
+			} catch {
+				// ignore
+			}
+			return undefined
+		}
+
+		let intent_id = (nativeIntent ?? paramsIntent ?? inputIntent ?? tryParseIntentFromParams()) as
+			| string
+			| undefined
+
+		// If intent_id is missing or empty, try an auto-select fallback (only when exactly one in-progress intent exists)
+		if (!intent_id || String(intent_id).trim() === "") {
+			// attempt to auto-select a single active intent from .orchestration/active_intents.yaml
+			try {
+				const orchestrationDir = path.join(task.cwd, ".orchestration")
+				const intentsFile = path.join(orchestrationDir, "active_intents.yaml")
+				const exists = await fs
+					.stat(intentsFile)
+					.then(() => true)
+					.catch(() => false)
+				if (exists) {
+					const content = await fs.readFile(intentsFile, "utf-8")
+					const data = yaml.parse(content)
+					const inProgress = (data?.active_intents || []).filter((i: any) => i?.status === "IN_PROGRESS")
+					if (inProgress.length === 1) {
+						intent_id = inProgress[0].id
+					}
+				}
+			} catch {
+				// ignore auto-select failures
+			}
+
+			if (!intent_id || String(intent_id).trim() === "") {
+				// Write a diagnostic snapshot to .orchestration for support inspection
+				try {
+					const diagDir = path.join(task.cwd, ".orchestration")
+					await fs.mkdir(diagDir, { recursive: true })
+					const out = path.join(diagDir, `agent-diagnostics-${Date.now()}.json`)
+					const snapshot = {
+						toolUse: (toolUse as any) || null,
+						nativeIntent: nativeIntent || null,
+						paramsIntent: paramsIntent || null,
+						inputIntent: inputIntent || null,
+					}
+					await fs.writeFile(out, JSON.stringify(snapshot, null, 2), "utf-8")
+				} catch {
+					// ignore diagnostics write failures
+				}
+
+				const structured = {
+					error_type: "missing_intent",
+					code: "HOOK-INT-001",
+					message: "Missing or empty intent_id in select_active_intent tool call",
+					retryable: false,
+					snapshot: {
+						toolUse: (toolUse as any) || null,
+						nativeIntent: nativeIntent || null,
+						paramsIntent: paramsIntent || null,
+						inputIntent: inputIntent || null,
+					},
+				}
+
+				return {
+					shouldProceed: false,
+					errorMessage: JSON.stringify(structured),
+				}
 			}
 		}
 

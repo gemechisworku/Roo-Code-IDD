@@ -37,7 +37,7 @@ export default {
 					description: CWD_PARAMETER_DESCRIPTION,
 				},
 			},
-			required: ["command", "cwd"],
+			required: ["command"],
 			additionalProperties: false,
 		},
 	},
