@@ -21,4 +21,16 @@ describe("CommandClassifier with project policy", () => {
 		// cleanup
 		await fs.rm(tmp, { recursive: true, force: true })
 	})
+
+	it("classifies common PowerShell safe commands as safe", () => {
+		expect(classifyCommand("Get-ChildItem")).toBe("safe")
+		expect(classifyCommand("gci -Force")).toBe("safe")
+		expect(classifyCommand("Get-Location")).toBe("safe")
+		expect(classifyCommand("Get-Content README.md")).toBe("safe")
+	})
+
+	it("classifies PowerShell remove commands as destructive", () => {
+		expect(classifyCommand("Remove-Item _qa_in_scope.txt")).toBe("destructive")
+		expect(classifyCommand("ri _qa_in_scope.txt")).toBe("destructive")
+	})
 })

@@ -7,9 +7,13 @@ export type CommandSafety = "safe" | "destructive"
 const SAFE_COMMAND_PATTERNS: RegExp[] = [
 	/^ls(\s|$)/,
 	/^dir(\s|$)/,
+	/^get-childitem(\s|$)/, // powershell dir
+	/^gci(\s|$)/, // powershell alias for Get-ChildItem
 	/^pwd(\s|$)/,
+	/^get-location(\s|$)/, // powershell pwd
 	/^whoami(\s|$)/,
 	/^cat(\s|$)/,
+	/^get-content(\s|$)/, // powershell cat/type
 	/^type(\s|$)/, // windows
 	/^head(\s|$)/,
 	/^tail(\s|$)/,
@@ -22,6 +26,8 @@ const DESTRUCTIVE_COMMAND_PATTERNS: RegExp[] = [
 	/\brm(\s|$)/,
 	/\bdel(\s|$)/,
 	/\berase(\s|$)/,
+	/\bremove-item(\s|$)/, // powershell rm/del
+	/\bri(\s|$)/, // powershell alias for Remove-Item
 	/\brmdir(\s|$)/,
 	/\bmv(\s|$)/,
 	/\bmove(\s|$)/,
@@ -88,6 +94,68 @@ export function classifyCommand(command: string, cwd?: string): CommandSafety {
 	}
 
 	// Default to destructive for unknown commands.
+	return "destructive"
+}
+
+export function classifyCommandWithDebug(
+	command: string,
+	cwd: string | undefined,
+	log: (message: string) => void,
+): CommandSafety {
+	const normalized = command.trim().toLowerCase()
+	log(`[command-classifier] raw="${command}" normalized="${normalized}"`)
+
+	if (!normalized) {
+		log("[command-classifier] decision=destructive reason=empty")
+		return "destructive"
+	}
+
+	if (/[<>]/.test(normalized)) {
+		log("[command-classifier] decision=destructive reason=redirection")
+		return "destructive"
+	}
+
+	const policy = loadCommandPolicy(cwd || process.cwd())
+	if (policy) {
+		for (const p of policy.safe || []) {
+			try {
+				const re = new RegExp(p, "i")
+				if (re.test(normalized)) {
+					log(`[command-classifier] decision=safe reason=policy_safe pattern=${p}`)
+					return "safe"
+				}
+			} catch {
+				log(`[command-classifier] policy_safe_invalid pattern=${p}`)
+			}
+		}
+		for (const p of policy.destructive || []) {
+			try {
+				const re = new RegExp(p, "i")
+				if (re.test(normalized)) {
+					log(`[command-classifier] decision=destructive reason=policy_destructive pattern=${p}`)
+					return "destructive"
+				}
+			} catch {
+				log(`[command-classifier] policy_destructive_invalid pattern=${p}`)
+			}
+		}
+	}
+
+	for (const pattern of SAFE_COMMAND_PATTERNS) {
+		if (pattern.test(normalized)) {
+			log(`[command-classifier] decision=safe reason=regex_safe pattern=${pattern}`)
+			return "safe"
+		}
+	}
+
+	for (const pattern of DESTRUCTIVE_COMMAND_PATTERNS) {
+		if (pattern.test(normalized)) {
+			log(`[command-classifier] decision=destructive reason=regex_destructive pattern=${pattern}`)
+			return "destructive"
+		}
+	}
+
+	log("[command-classifier] decision=destructive reason=default")
 	return "destructive"
 }
 

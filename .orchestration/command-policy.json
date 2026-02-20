@@ -1,0 +1,3 @@
+{
+	"safe": ["^get-childitem\\b", "^powershell\\s+-command\\s+get-childitem\\b"]
+}

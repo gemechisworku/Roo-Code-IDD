@@ -8,7 +8,7 @@ import type { ToolUse } from "../shared/tools"
 import type { Task } from "../core/task/Task"
 import type { PreToolHook, PreHookResult } from "./types"
 import { isDestructiveTool, isMutatingTool } from "./ToolClassifier"
-import { classifyCommand, type CommandSafety } from "./CommandClassifier"
+import { classifyCommandWithDebug, type CommandSafety } from "./CommandClassifier"
 import { serializeHookError } from "./hookErrors"
 import { unescapeHtmlEntities } from "../utils/text-normalization"
 
@@ -100,7 +100,12 @@ export class ScopeEnforcementHook implements PreToolHook {
 		if (toolUse.name === "execute_command") {
 			const cmdRaw = (toolUse.nativeArgs as any)?.command || (toolUse.params as any)?.command
 			const command = unescapeHtmlEntities(String(cmdRaw ?? ""))
-			const classification = classifyCommand(command, task.cwd)
+			const logger =
+				typeof (task as any).providerRef?.deref === "function"
+					? (task as any).providerRef.deref()?.log?.bind((task as any).providerRef.deref())
+					: undefined
+			const log = logger ?? ((message: string) => console.log(message))
+			const classification = classifyCommandWithDebug(command, task.cwd, log)
 
 			if (classification === "safe") {
 				this.recordDecision(task, {
