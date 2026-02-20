@@ -86,6 +86,76 @@ export class SelectActiveIntentTool extends BaseTool<"select_active_intent"> {
 				return
 			}
 
+			const isTraceRelated = (trace: any) => {
+				if (!trace) return false
+				if (trace.intent_id === intent_id || trace.intentId === intent_id) return true
+				return trace.files?.some((file: any) =>
+					file.conversations?.some((conv: any) =>
+						conv.related?.some((rel: any) => rel.type === "specification" && rel.value === intent_id),
+					),
+				)
+			}
+
+			const formatTraceEntry = (trace: any) => {
+				const files = Array.isArray(trace.files) ? trace.files : []
+				const fileBlocks = files
+					.map((file: any) => {
+						const relPath = file.relative_path || file.path || "unknown"
+						const conversations = Array.isArray(file.conversations) ? file.conversations : []
+						const fallbackConversation =
+							conversations.length === 0 && file.content_hash
+								? [
+										{
+											contributor: trace.contributor,
+											ranges: [{ content_hash: file.content_hash }],
+										},
+									]
+								: conversations
+
+						if (!fallbackConversation || fallbackConversation.length === 0) {
+							return `    <file path="${relPath}"/>\n`
+						}
+
+						return (
+							`    <file path="${relPath}">\n` +
+							fallbackConversation
+								.map((conv: any) => {
+									const contributorId =
+										conv.contributor?.model_identifier ||
+										conv.contributor ||
+										trace.contributor?.model_identifier ||
+										trace.contributor ||
+										"unknown"
+									const ranges = Array.isArray(conv.ranges) ? conv.ranges : []
+									const rangeLines = ranges
+										.map((range: any) => {
+											const start = range.start_line ?? range.startLine
+											const end = range.end_line ?? range.endLine ?? start
+											const hash = range.content_hash ?? range.hash
+											if (hash && typeof start === "number" && typeof end === "number") {
+												return `        <range lines="${start}-${end}" hash="${hash}"/>\n`
+											}
+											if (hash) {
+												return `        <range hash="${hash}"/>\n`
+											}
+											return ""
+										})
+										.join("")
+									return (
+										`      <conversation contributor="${contributorId}">\n` +
+										rangeLines +
+										`      </conversation>\n`
+									)
+								})
+								.join("") +
+							`    </file>\n`
+						)
+					})
+					.join("")
+
+				return `<trace_entry id="${trace.id}" timestamp="${trace.timestamp}">\n${fileBlocks}</trace_entry>\n`
+			}
+
 			// Read agent_trace.jsonl for related history
 			const traceFile = path.join(orchestrationDir, "agent_trace.jsonl")
 			let relatedTraces: any[] = []
@@ -103,17 +173,7 @@ export class SelectActiveIntentTool extends BaseTool<"select_active_intent"> {
 							return null
 						}
 					})
-					.filter(
-						(trace) =>
-							trace &&
-							trace.files?.some((file: any) =>
-								file.conversations?.some((conv: any) =>
-									conv.related?.some(
-										(rel: any) => rel.type === "specification" && rel.value === intent_id,
-									),
-								),
-							),
-					)
+					.filter((trace) => isTraceRelated(trace))
 					.slice(-5) // Last 5 related traces
 			} catch (error) {
 				// Trace file might not exist yet, that's okay
@@ -148,33 +208,7 @@ ${selectedIntent.acceptance_criteria.map((criteria) => `  <criteria>${criteria}<
 <brief_history>
 ${
 	relatedTraces.length > 0
-		? relatedTraces
-				.map(
-					(trace) =>
-						`<trace_entry id="${trace.id}" timestamp="${trace.timestamp}">\n` +
-						trace.files
-							.map(
-								(file: any) =>
-									`    <file path="${file.relative_path}">\n` +
-									file.conversations
-										.map(
-											(conv: any) =>
-												`      <conversation contributor="${conv.contributor?.model_identifier || "unknown"}">\n` +
-												conv.ranges
-													.map(
-														(range: any) =>
-															`        <range lines="${range.start_line}-${range.end_line}" hash="${range.content_hash}"/>\n`,
-													)
-													.join("") +
-												`      </conversation>\n`,
-										)
-										.join("") +
-									`    </file>\n`,
-							)
-							.join("") +
-						`</trace_entry>\n`,
-				)
-				.join("")
+		? relatedTraces.map((trace) => formatTraceEntry(trace)).join("")
 		: "<no_previous_work>No previous work found for this intent.</no_previous_work>"
 }
 </brief_history>

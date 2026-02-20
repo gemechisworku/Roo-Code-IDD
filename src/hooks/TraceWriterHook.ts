@@ -5,14 +5,60 @@ import crypto from "crypto"
 import type { ToolUse } from "../shared/tools"
 import type { Task } from "../core/task/Task"
 import type { PostToolHook, PostHookResult } from "./types"
+import { computeAddedRanges, extractTargetPaths, hashContent, isBinaryBuffer } from "./traceUtils"
 
-function sha256(content: string): string {
-	return crypto.createHash("sha256").update(content, "utf8").digest("hex")
+type SnapshotEntry = {
+	before: string | null
+}
+
+type SnapshotStore = Map<string, Map<string, SnapshotEntry>>
+
+function getSnapshotStore(task: Task): SnapshotStore | undefined {
+	return (task as any).traceSnapshots as SnapshotStore | undefined
+}
+
+function getTraceKey(toolUse: ToolUse): string {
+	const anyTool = toolUse as any
+	if (anyTool.traceKey) return anyTool.traceKey
+	const key = toolUse.id ?? `${toolUse.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+	anyTool.traceKey = key
+	return key
+}
+
+function getRevisionId(task: Task): string | null {
+	const service = (task as any).checkpointService
+	if (!service) return null
+	const checkpoints = typeof service.getCheckpoints === "function" ? service.getCheckpoints() : []
+	return checkpoints?.[checkpoints.length - 1] ?? service.baseHash ?? null
+}
+
+function sanitizeParams(toolUse: ToolUse): Record<string, unknown> | null {
+	const params = (toolUse.nativeArgs as Record<string, unknown>) ?? toolUse.params
+	if (!params) return null
+
+	const allowedKeys = ["path", "file_path", "intent_id", "mutation_class", "command", "prompt", "image"]
+	const sanitized: Record<string, unknown> = {}
+	for (const key of allowedKeys) {
+		if (params[key] !== undefined) sanitized[key] = params[key]
+	}
+
+	if (toolUse.name === "apply_patch" && params["patch"]) {
+		sanitized.patch = "[redacted]"
+	}
+	if (toolUse.name === "apply_diff" && params["diff"]) {
+		sanitized.diff = "[redacted]"
+	}
+	if ((toolUse.name === "edit" || toolUse.name === "search_replace" || toolUse.name === "edit_file") && params) {
+		if (params["old_string"]) sanitized.old_string = "[redacted]"
+		if (params["new_string"]) sanitized.new_string = "[redacted]"
+	}
+
+	return Object.keys(sanitized).length > 0 ? sanitized : null
 }
 
 /**
  * Trace Writer Hook
- * Appends a simple trace entry to .orchestration/agent_trace.jsonl for mutating tools.
+ * Appends intent-aware trace entries to .orchestration/agent_trace.jsonl for mutating tools.
  */
 export class TraceWriterHook implements PostToolHook {
 	name = "trace_writer"
@@ -34,29 +80,95 @@ export class TraceWriterHook implements PostToolHook {
 			const orchestrationDir = path.join(cwd, ".orchestration")
 			await fs.mkdir(orchestrationDir, { recursive: true })
 
+			const intentId =
+				(toolUse.nativeArgs as any)?.intent_id ??
+				(toolUse.params as any)?.intent_id ??
+				(task as any).activeIntent?.id ??
+				null
+
+			const mutationClass =
+				(toolUse.nativeArgs as any)?.mutation_class ?? (toolUse.params as any)?.mutation_class ?? null
+
+			const contributor = {
+				model_identifier: task.api?.getModel?.()?.id ?? null,
+				task_id: (task as any).taskId ?? null,
+				instance_id: (task as any).instanceId ?? null,
+			}
+
+			const traceKey = getTraceKey(toolUse)
+			const snapshotStore = getSnapshotStore(task)
+			const snapshot = snapshotStore?.get(traceKey)
+			if (snapshotStore) {
+				snapshotStore.delete(traceKey)
+			}
+
 			const files: Array<any> = []
+			const targetPaths = extractTargetPaths(toolUse)
 
-			const targetPaths = this.extractPathsFromToolUse(toolUse)
+			for (const relPath of targetPaths) {
+				const abs = path.resolve(cwd, relPath)
+				const relative = path.relative(cwd, abs)
+				const before = snapshot?.get(relPath)?.before ?? ""
 
-			for (const p of targetPaths) {
 				try {
-					const abs = path.resolve(cwd, p)
-					const rel = path.relative(cwd, abs)
-					const content = await fs.readFile(abs, "utf-8")
-					files.push({ relative_path: rel, content_hash: sha256(content) })
-				} catch (error) {
+					const buffer = await fs.readFile(abs)
+					const fileHash = hashContent(buffer)
+
+					if (isBinaryBuffer(buffer)) {
+						files.push({
+							relative_path: relative,
+							content_hash: fileHash,
+							conversations: [
+								{
+									contributor,
+									related: intentId ? [{ type: "specification", value: intentId }] : [],
+									ranges: [],
+								},
+							],
+						})
+						continue
+					}
+
+					const afterText = buffer.toString("utf8")
+					const ranges = computeAddedRanges(before ?? "", afterText)
+
+					files.push({
+						relative_path: relative,
+						content_hash: fileHash,
+						conversations: [
+							{
+								contributor,
+								related: intentId ? [{ type: "specification", value: intentId }] : [],
+								ranges,
+							},
+						],
+					})
+				} catch {
 					// If file not found or unreadable, still record the attempted path
-					files.push({ relative_path: p, content_hash: null })
+					files.push({
+						relative_path: relative,
+						content_hash: null,
+						conversations: [
+							{
+								contributor,
+								related: intentId ? [{ type: "specification", value: intentId }] : [],
+								ranges: [],
+							},
+						],
+					})
 				}
 			}
 
 			const entry = {
 				id: crypto.randomUUID(),
 				timestamp: new Date().toISOString(),
-				intent_id: (task as any).activeIntent?.id || null,
+				intent_id: intentId,
+				mutation_class: mutationClass,
 				tool: toolUse.name,
-				params: toolUse.params ?? null,
-				contributor: task.api?.getModel?.()?.id ?? null,
+				tool_use_id: toolUse.id ?? null,
+				params: sanitizeParams(toolUse),
+				contributor,
+				vcs: { revision_id: getRevisionId(task) },
 				files,
 			}
 
@@ -68,22 +180,5 @@ export class TraceWriterHook implements PostToolHook {
 			console.error("TraceWriterHook error:", error)
 			return { success: false, errorMessage: error.message }
 		}
-	}
-
-	private extractPathsFromToolUse(toolUse: ToolUse): string[] {
-		const paths: string[] = []
-		const tryAdd = (p: any) => {
-			if (!p) return
-			if (Array.isArray(p)) p.forEach((x) => tryAdd(x))
-			else if (typeof p === "string") paths.push(p)
-			else if (typeof p === "object") {
-				if (p.path) tryAdd(p.path)
-				if (p.file_path) tryAdd(p.file_path)
-				if (p.files) tryAdd(p.files)
-			}
-		}
-		tryAdd(toolUse.params)
-		tryAdd((toolUse as any).nativeArgs)
-		return paths.map((p) => String(p))
 	}
 }

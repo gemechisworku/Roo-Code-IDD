@@ -1,0 +1,7 @@
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T13:54:17.936Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T13:54:22.577Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T13:54:40.257Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T13:54:42.853Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"rejected","reason":"unknown_targets","timestamp":"2026-02-20T13:54:53.820Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"rejected","reason":"unknown_targets","timestamp":"2026-02-20T13:54:55.638Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"rejected","reason":"unknown_targets","timestamp":"2026-02-20T13:55:05.791Z"}

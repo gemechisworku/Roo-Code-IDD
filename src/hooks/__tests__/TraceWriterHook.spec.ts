@@ -2,12 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import fs from "fs/promises"
 import path from "path"
 import os from "os"
-import crypto from "crypto"
+import { TraceSnapshotHook } from "../TraceSnapshotHook"
 import { TraceWriterHook } from "../TraceWriterHook"
-
-function sha256(content: string) {
-	return crypto.createHash("sha256").update(content, "utf8").digest("hex")
-}
+import { hashContent } from "../traceUtils"
 
 describe("TraceWriterHook", () => {
 	let tmpDir: string
@@ -26,9 +23,8 @@ describe("TraceWriterHook", () => {
 
 	it("writes a trace entry with file hash when target file exists", async () => {
 		const filePath = path.join(tmpDir, "hello.txt")
-		await fs.writeFile(filePath, "hello world", "utf8")
-
 		const hook = new TraceWriterHook()
+		const snapshotHook = new TraceSnapshotHook()
 
 		const fakeTask: any = {
 			cwd: tmpDir,
@@ -38,8 +34,12 @@ describe("TraceWriterHook", () => {
 
 		const toolUse: any = {
 			name: "write_to_file",
-			params: { path: "hello.txt" },
+			params: { path: "hello.txt", intent_id: "intent-123", mutation_class: "AST_REFACTOR" },
 		}
+
+		await snapshotHook.execute(fakeTask, toolUse)
+		const afterContent = "hello world\nsecond line\n"
+		await fs.writeFile(filePath, afterContent, "utf8")
 
 		const res = await hook.execute(fakeTask, toolUse, null)
 		expect(res.success).toBe(true)
@@ -51,20 +51,28 @@ describe("TraceWriterHook", () => {
 
 		expect(entry.tool).toBe("write_to_file")
 		expect(entry.intent_id).toBe("intent-123")
+		expect(entry.mutation_class).toBe("AST_REFACTOR")
 		expect(Array.isArray(entry.files)).toBe(true)
 		expect(entry.files.length).toBeGreaterThanOrEqual(1)
 		const first = entry.files[0]
 		expect(first.relative_path).toBe("hello.txt")
-		expect(first.content_hash).toBe(sha256("hello world"))
+		expect(first.content_hash).toBe(hashContent(await fs.readFile(filePath)))
+		expect(first.conversations[0].ranges[0]).toMatchObject({ start_line: 1, end_line: 2 })
+		expect(first.conversations[0].ranges[0].content_hash).toBe(hashContent(afterContent))
 	})
 
 	it("records attempted path with null hash when file missing", async () => {
 		const hook = new TraceWriterHook()
+		const snapshotHook = new TraceSnapshotHook()
 		const fakeTask: any = { cwd: tmpDir, api: { getModel: () => ({ id: "m" }) } }
 		;(fakeTask as any).activeIntent = { id: "intent-456" }
 
-		const toolUse: any = { name: "apply_patch", params: { path: "nope.txt" } }
+		const toolUse: any = {
+			name: "apply_patch",
+			params: { path: "nope.txt", intent_id: "intent-456", mutation_class: "INTENT_EVOLUTION" },
+		}
 
+		await snapshotHook.execute(fakeTask, toolUse)
 		const res = await hook.execute(fakeTask, toolUse, null)
 		expect(res.success).toBe(true)
 
@@ -75,5 +83,6 @@ describe("TraceWriterHook", () => {
 		expect(entry.tool).toBe("apply_patch")
 		expect(entry.files[0].relative_path).toBe("nope.txt")
 		expect(entry.files[0].content_hash).toBeNull()
+		expect(entry.files[0].conversations[0].ranges.length).toBe(0)
 	})
 })

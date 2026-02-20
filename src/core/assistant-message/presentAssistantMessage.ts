@@ -42,6 +42,7 @@ import { codebaseSearchTool } from "../tools/CodebaseSearchTool"
 import { HookEngine } from "../../hooks/HookEngine"
 import { ContextInjectorHook } from "../../hooks/ContextInjectorHook"
 import { ScopeEnforcementHook } from "../../hooks/ScopeEnforcementHook"
+import { TraceSnapshotHook } from "../../hooks/TraceSnapshotHook"
 import { TraceWriterHook } from "../../hooks/TraceWriterHook"
 
 import { formatResponse } from "../prompts/responses"
@@ -82,7 +83,8 @@ export async function presentAssistantMessage(cline: Task) {
 	hookEngine.registerHook(new ContextInjectorHook())
 	// Phase 2: enforce scope and authorization boundary before destructive tools
 	hookEngine.registerHook(new ScopeEnforcementHook())
-	// Phase 3: simple trace writer to append intent-aware trace entries after mutating tools
+	// Phase 3: capture pre-mutation snapshots and append intent-aware trace entries after mutating tools
+	hookEngine.registerHook(new TraceSnapshotHook())
 	hookEngine.registerHook(new TraceWriterHook())
 
 	if (cline.currentStreamingContentIndex >= cline.assistantMessageContent.length) {
