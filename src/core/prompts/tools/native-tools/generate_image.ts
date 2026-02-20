@@ -56,7 +56,7 @@ export default {
 					description: MUTATION_CLASS_PARAMETER_DESCRIPTION,
 				},
 			},
-			required: ["prompt", "path", "image"],
+			required: ["prompt", "path", "image", "intent_id", "mutation_class"],
 			additionalProperties: false,
 		},
 	},

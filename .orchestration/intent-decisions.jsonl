@@ -5,3 +5,5 @@
 {"intent_id":"INT-001","tool":"apply_patch","decision":"rejected","reason":"unknown_targets","timestamp":"2026-02-20T13:54:53.820Z"}
 {"intent_id":"INT-001","tool":"apply_patch","decision":"rejected","reason":"unknown_targets","timestamp":"2026-02-20T13:54:55.638Z"}
 {"intent_id":"INT-001","tool":"apply_patch","decision":"rejected","reason":"unknown_targets","timestamp":"2026-02-20T13:55:05.791Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T14:11:58.527Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T14:12:03.052Z"}

@@ -105,7 +105,7 @@ describe("ScopeEnforcementHook", () => {
 		expect(err.error_type).toBe("command_not_authorized")
 	})
 
-	it("blocks mutating tools when mutation metadata is missing", async () => {
+	it("auto-injects mutation metadata when missing", async () => {
 		const hook = new ScopeEnforcementHook()
 		const task = makeTask({
 			activeIntent: {
@@ -116,11 +116,9 @@ describe("ScopeEnforcementHook", () => {
 		const toolUse: any = { name: "write_to_file", params: { path: "src/foo.ts" } }
 
 		const res = await hook.execute(task, toolUse)
-		expect(res.shouldProceed).toBe(false)
-		const err = JSON.parse(res.errorMessage as string)
-		expect(err.error_type).toBe("missing_metadata")
-		expect(err.missing).toContain("intent_id")
-		expect(err.missing).toContain("mutation_class")
+		expect(res.shouldProceed).toBe(true)
+		expect(toolUse.params.intent_id).toBe("i1")
+		expect(toolUse.params.mutation_class).toBe("INTENT_EVOLUTION")
 	})
 
 	it("blocks mutating tools when intent_id does not match active intent", async () => {

@@ -51,7 +51,7 @@ const edit = {
 					description: MUTATION_CLASS_PARAMETER_DESCRIPTION,
 				},
 			},
-			required: ["file_path", "old_string", "new_string"],
+			required: ["file_path", "old_string", "new_string", "intent_id", "mutation_class"],
 			additionalProperties: false,
 		},
 	},

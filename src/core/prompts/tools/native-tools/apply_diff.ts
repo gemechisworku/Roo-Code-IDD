@@ -40,7 +40,7 @@ export const apply_diff = {
 					description: MUTATION_CLASS_PARAMETER_DESCRIPTION,
 				},
 			},
-			required: ["path", "diff"],
+			required: ["path", "diff", "intent_id", "mutation_class"],
 			additionalProperties: false,
 		},
 	},

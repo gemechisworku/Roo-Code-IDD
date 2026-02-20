@@ -60,22 +60,14 @@ export class ScopeEnforcementHook implements PreToolHook {
 		// Metadata enforcement for mutating tools
 		if (isMutatingTool(toolUse.name)) {
 			const metadata = this.getMutationMetadata(toolUse)
-			const missing: string[] = []
-			if (!metadata.intent_id) missing.push("intent_id")
-			if (!metadata.mutation_class) missing.push("mutation_class")
+			const autoIntentId = metadata.intent_id ?? activeIntent.id
+			const autoMutationClass = metadata.mutation_class ?? "INTENT_EVOLUTION"
 
-			if (missing.length > 0) {
-				const err = {
-					error_type: "missing_metadata",
-					code: "REQ-003",
-					intent_id: activeIntent.id,
-					tool: toolUse.name,
-					message: "Mutation metadata is required for workspace modifications",
-				}
-				return { shouldProceed: false, errorMessage: serializeHookError(err, { missing }) }
+			if (!metadata.intent_id || !metadata.mutation_class) {
+				this.applyMutationMetadata(toolUse, autoIntentId, autoMutationClass)
 			}
 
-			if (metadata.intent_id !== activeIntent.id) {
+			if (autoIntentId !== activeIntent.id) {
 				const err = {
 					error_type: "intent_mismatch",
 					code: "REQ-004",
@@ -84,11 +76,11 @@ export class ScopeEnforcementHook implements PreToolHook {
 				}
 				return {
 					shouldProceed: false,
-					errorMessage: serializeHookError(err, { provided_intent_id: metadata.intent_id }),
+					errorMessage: serializeHookError(err, { provided_intent_id: autoIntentId }),
 				}
 			}
 
-			const mutationClass = metadata.mutation_class
+			const mutationClass = autoMutationClass
 			const allowed = new Set(["AST_REFACTOR", "INTENT_EVOLUTION"])
 			if (!mutationClass || !allowed.has(mutationClass)) {
 				const err = {
@@ -285,6 +277,17 @@ export class ScopeEnforcementHook implements PreToolHook {
 			intent_id: fromNative.intent_id ?? fromParams.intent_id,
 			mutation_class: fromNative.mutation_class ?? fromParams.mutation_class,
 		}
+	}
+
+	private applyMutationMetadata(toolUse: ToolUse, intent_id: string, mutation_class: string): void {
+		const nativeArgs = ((toolUse as any).nativeArgs ??= {})
+		const params = ((toolUse as any).params ??= {})
+
+		if (!nativeArgs.intent_id) nativeArgs.intent_id = intent_id
+		if (!nativeArgs.mutation_class) nativeArgs.mutation_class = mutation_class
+
+		if (!params.intent_id) params.intent_id = intent_id
+		if (!params.mutation_class) params.mutation_class = mutation_class
 	}
 
 	private async promptApproval(message: string): Promise<boolean> {

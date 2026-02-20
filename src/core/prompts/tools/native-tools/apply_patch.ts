@@ -64,7 +64,7 @@ const apply_patch = {
 					description: MUTATION_CLASS_PARAMETER_DESCRIPTION,
 				},
 			},
-			required: ["patch"],
+			required: ["patch", "intent_id", "mutation_class"],
 			additionalProperties: false,
 		},
 	},
