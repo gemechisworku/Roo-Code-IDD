@@ -218,6 +218,19 @@ export class EditTool extends BaseTool<"edit"> {
 				return
 			}
 
+			const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+			if (staleAfterApproval) {
+				task.recordToolError("edit", staleAfterApproval)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(staleAfterApproval))
+				if (!isPreventFocusDisruptionEnabled) {
+					await task.diffViewProvider.revertChanges()
+				}
+				await task.diffViewProvider.reset()
+				this.resetPartialState()
+				return
+			}
+
 			// Save the changes
 			if (isPreventFocusDisruptionEnabled) {
 				// Direct file write without diff view or opening the file

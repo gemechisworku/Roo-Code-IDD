@@ -87,3 +87,30 @@ try {
 ---
 
 _This file is automatically updated when agents encounter failures or make architectural decisions._
+
+### Verification Failure (INT-001)
+
+- **Timestamp**: 2026-02-20T15:56:33.377Z
+- **Tool**: apply_patch
+- **Path**: src/auth/\_qa_lock.txt
+- **Lesson**: The file changed between read and write. Refresh context and retry the change.
+- **Expected Hash**: 7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6
+- **Actual Hash**: 1c69779f4d6d13514726491273ceade5f975a9973f99f6b00e0db405c56139fb
+
+### Verification Failure (INT-001)
+
+- **Timestamp**: 2026-02-20T16:06:13.136Z
+- **Tool**: apply_patch
+- **Path**: src/auth/\_qa_lock.txt
+- **Lesson**: The file changed between read and write. Refresh context and retry the change.
+- **Expected Hash**: 7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6
+- **Actual Hash**: a5406fc126c2bf45b47433c7b2676cce32321fd95d9c67a7dff067249abdb712
+
+### Verification Failure (INT-001)
+
+- **Timestamp**: 2026-02-20T16:07:27.737Z
+- **Tool**: apply_patch
+- **Path**: src/auth/\_qa_lock.txt
+- **Lesson**: The file changed between read and write. Refresh context and retry the change.
+- **Expected Hash**: 7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6
+- **Actual Hash**: a5406fc126c2bf45b47433c7b2676cce32321fd95d9c67a7dff067249abdb712

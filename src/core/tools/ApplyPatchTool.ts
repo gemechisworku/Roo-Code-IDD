@@ -222,6 +222,18 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 			return
 		}
 
+		const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+		if (staleAfterApproval) {
+			task.recordToolError("apply_patch", staleAfterApproval)
+			task.didToolFailInCurrentTurn = true
+			pushToolResult(formatResponse.toolError(staleAfterApproval))
+			if (!isPreventFocusDisruptionEnabled) {
+				await task.diffViewProvider.revertChanges()
+			}
+			await task.diffViewProvider.reset()
+			return
+		}
+
 		// Save the changes
 		if (isPreventFocusDisruptionEnabled) {
 			await task.diffViewProvider.saveDirectly(relPath, newContent, true, diagnosticsEnabled, writeDelayMs)
@@ -286,6 +298,14 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 
 		if (!didApprove) {
 			pushToolResult("Delete operation was rejected by the user.")
+			return
+		}
+
+		const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+		if (staleAfterApproval) {
+			task.recordToolError("apply_patch", staleAfterApproval)
+			task.didToolFailInCurrentTurn = true
+			pushToolResult(formatResponse.toolError(staleAfterApproval))
 			return
 		}
 
@@ -390,6 +410,18 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 				await task.diffViewProvider.revertChanges()
 			}
 			pushToolResult("Changes were rejected by the user.")
+			await task.diffViewProvider.reset()
+			return
+		}
+
+		const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+		if (staleAfterApproval) {
+			task.recordToolError("apply_patch", staleAfterApproval)
+			task.didToolFailInCurrentTurn = true
+			pushToolResult(formatResponse.toolError(staleAfterApproval))
+			if (!isPreventFocusDisruptionEnabled) {
+				await task.diffViewProvider.revertChanges()
+			}
 			await task.diffViewProvider.reset()
 			return
 		}

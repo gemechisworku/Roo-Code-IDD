@@ -181,6 +181,16 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 					return
 				}
 
+				const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+				if (staleAfterApproval) {
+					task.recordToolError("apply_diff", staleAfterApproval)
+					task.didToolFailInCurrentTurn = true
+					pushToolResult(formatResponse.toolError(staleAfterApproval))
+					await task.diffViewProvider.reset()
+					this.resetPartialState()
+					return
+				}
+
 				// Save directly without showing diff view or opening the file
 				task.diffViewProvider.editType = "modify"
 				task.diffViewProvider.originalContent = originalContent
@@ -224,6 +234,17 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 				if (!didApprove) {
 					await task.diffViewProvider.revertChanges()
 					task.processQueuedMessages()
+					return
+				}
+
+				const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+				if (staleAfterApproval) {
+					task.recordToolError("apply_diff", staleAfterApproval)
+					task.didToolFailInCurrentTurn = true
+					pushToolResult(formatResponse.toolError(staleAfterApproval))
+					await task.diffViewProvider.revertChanges()
+					await task.diffViewProvider.reset()
+					this.resetPartialState()
 					return
 				}
 
