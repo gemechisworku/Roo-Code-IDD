@@ -19,6 +19,10 @@ CRITICAL REQUIREMENTS FOR USING THIS TOOL:
    - If multiple instances exist, gather enough context to uniquely identify each one
    - Plan separate tool calls for each instance`
 
+const INTENT_ID_PARAMETER_DESCRIPTION = `The active intent ID that authorizes this mutation (must match an IN_PROGRESS intent in .orchestration/active_intents.yaml).`
+
+const MUTATION_CLASS_PARAMETER_DESCRIPTION = `Mutation class for traceability. Must be one of "AST_REFACTOR" or "INTENT_EVOLUTION".`
+
 const search_replace = {
 	type: "function",
 	function: {
@@ -41,8 +45,16 @@ const search_replace = {
 					type: "string",
 					description: "The edited text to replace the old_string (must be different from the old_string)",
 				},
+				intent_id: {
+					type: "string",
+					description: INTENT_ID_PARAMETER_DESCRIPTION,
+				},
+				mutation_class: {
+					type: "string",
+					description: MUTATION_CLASS_PARAMETER_DESCRIPTION,
+				},
 			},
-			required: ["file_path", "old_string", "new_string"],
+			required: ["file_path", "old_string", "new_string", "intent_id", "mutation_class"],
 			additionalProperties: false,
 		},
 	},

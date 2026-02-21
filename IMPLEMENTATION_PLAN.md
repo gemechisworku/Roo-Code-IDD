@@ -37,7 +37,7 @@ Tasks:
 - Implement `ContextInjectorHook` (PreToolHook) to load intent data and return an `<intent_context>` XML block.
 - Register the hook in `presentAssistantMessage()` and wire injected context into the conversation flow.
 
-Phase 2 — Hook Middleware & Security Boundary (In progress)
+Phase 2 — Hook Middleware & Security Boundary (Implemented)
 Goal: Enforce scope and authorization before destructive tools run.
 Tasks:
 
@@ -49,7 +49,7 @@ Tasks:
     - Require explicit approval for `execute_command`.
 - Register `ScopeEnforcementHook` in `presentAssistantMessage()` so it runs pre-tool.
 
-Phase 3 — AI-Native Git Layer (Traceability)
+Phase 3 — AI-Native Git Layer (Traceability) (Implemented)
 Goal: Log precise mappings from intent → code AST (spatially independent) → agent action.
 Tasks:
 
@@ -57,13 +57,13 @@ Tasks:
 - Extend mutating tool post-hooks to append structured trace entries to `.orchestration/agent_trace.jsonl` following the schema (include `intent_id`, `content_hash`, ranges, contributor metadata, `vcs.revision_id`).
 - Modify write/apply tools to require `intent_id` and `mutation_class` metadata in tool payloads (AST_REFACTOR vs INTENT_EVOLUTION).
 
-Phase 4 — Parallel Orchestration (Master Thinker)
+Phase 4 — Parallel Orchestration (Master Thinker) (In progress)
 Goal: Support parallel agents with optimistic locking and shared knowledge.
 Tasks:
 
-- Implement optimistic locking: on tool start compute file content hash; before write compare current hash; if mismatch, block with `Stale File` error.
-- Implement a `Lessons Learned` Post-Hook that appends to `AGENT.md` on verification failures.
-- Demonstrate parallel Architect/Builder sessions updating `.orchestration/agent_trace.jsonl` safely.
+- Implement optimistic locking: on tool start compute file content hash; before write compare current hash; if mismatch, block with `Stale File` error. (Done)
+- Implement a `Lessons Learned` Post-Hook that appends to `AGENT.md` on verification failures. (Done)
+- Demonstrate parallel Architect/Builder sessions updating `.orchestration/agent_trace.jsonl` safely. (Pending)
 
 ## Implementation Sequence & Milestones
 

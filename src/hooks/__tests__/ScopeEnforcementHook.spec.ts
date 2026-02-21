@@ -1,16 +1,28 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
 import path from "path"
+import * as vscode from "vscode"
 import { ScopeEnforcementHook } from "../ScopeEnforcementHook"
+
+vi.mock("vscode", () => ({
+	window: {
+		showWarningMessage: vi.fn(),
+	},
+}))
+
+const showWarningMessageMock = vi.mocked(vscode.window.showWarningMessage)
 
 function makeTask(overrides: any = {}) {
 	return {
 		cwd: process.cwd(),
-		ask: async (_type: string, _message?: string) => ({ response: "yesButtonClicked" }),
 		...overrides,
 	} as any
 }
 
 describe("ScopeEnforcementHook", () => {
+	beforeEach(() => {
+		showWarningMessageMock.mockReset()
+	})
+
 	it("blocks when no active intent is selected", async () => {
 		const hook = new ScopeEnforcementHook()
 		const task = makeTask({ activeIntent: undefined })
@@ -29,22 +41,29 @@ describe("ScopeEnforcementHook", () => {
 				context: `<intent_context><owned_scope><path>src</path></owned_scope></intent_context>`,
 			},
 		})
-		const toolUse: any = { name: "write_to_file", params: { path: path.join("src", "foo.ts") } }
+		const toolUse: any = {
+			name: "write_to_file",
+			params: { path: path.join("src", "foo.ts"), intent_id: "i1", mutation_class: "AST_REFACTOR" },
+		}
 
 		const res = await hook.execute(task, toolUse)
 		expect(res.shouldProceed).toBe(true)
+		expect(showWarningMessageMock).not.toHaveBeenCalled()
 	})
 
 	it("prompts and blocks when target is outside owned scope and user denies", async () => {
+		showWarningMessageMock.mockResolvedValue({ title: "Reject" } as vscode.MessageItem)
 		const hook = new ScopeEnforcementHook()
 		const task = makeTask({
 			activeIntent: {
 				id: "i1",
 				context: `<intent_context><owned_scope><path>src</path></owned_scope></intent_context>`,
 			},
-			ask: async (_type: string, _message?: string) => ({ response: "noButtonClicked" }),
 		})
-		const toolUse: any = { name: "write_to_file", params: { path: path.join("other", "foo.ts") } }
+		const toolUse: any = {
+			name: "write_to_file",
+			params: { path: path.join("other", "foo.ts"), intent_id: "i1", mutation_class: "AST_REFACTOR" },
+		}
 
 		const res = await hook.execute(task, toolUse)
 		expect(res.shouldProceed).toBe(false)
@@ -56,31 +75,89 @@ describe("ScopeEnforcementHook", () => {
 		expect(err.filename).toBe(path.join("other", "foo.ts"))
 	})
 
-	it("requires approval for execute_command and respects response", async () => {
+	it("allows safe execute_command without approval", async () => {
 		const hook = new ScopeEnforcementHook()
-		// Deny first
-		const denyTask = makeTask({
+		const task = makeTask({
 			activeIntent: {
 				id: "i1",
 				context: `<intent_context><owned_scope><path>src</path></owned_scope></intent_context>`,
 			},
-			ask: async (_type: string, _message?: string) => ({ response: "noButtonClicked" }),
+		})
+		const cmdUse: any = { name: "execute_command", nativeArgs: { command: "pwd" } }
+		const res = await hook.execute(task, cmdUse)
+		expect(res.shouldProceed).toBe(true)
+		expect(showWarningMessageMock).not.toHaveBeenCalled()
+	})
+
+	it("blocks destructive execute_command when user rejects", async () => {
+		showWarningMessageMock.mockResolvedValue({ title: "Reject" } as vscode.MessageItem)
+		const hook = new ScopeEnforcementHook()
+		const task = makeTask({
+			activeIntent: {
+				id: "i1",
+				context: `<intent_context><owned_scope><path>src</path></owned_scope></intent_context>`,
+			},
 		})
 		const cmdUse: any = { name: "execute_command", nativeArgs: { command: "rm -rf /" } }
-		const res1 = await hook.execute(denyTask, cmdUse)
-		expect(res1.shouldProceed).toBe(false)
-		const err = JSON.parse(res1.errorMessage as string)
+		const res = await hook.execute(task, cmdUse)
+		expect(res.shouldProceed).toBe(false)
+		const err = JSON.parse(res.errorMessage as string)
 		expect(err.error_type).toBe("command_not_authorized")
+	})
 
-		// Approve
-		const approveTask = makeTask({
+	it("auto-injects mutation metadata when missing", async () => {
+		const hook = new ScopeEnforcementHook()
+		const task = makeTask({
 			activeIntent: {
 				id: "i1",
 				context: `<intent_context><owned_scope><path>src</path></owned_scope></intent_context>`,
 			},
-			ask: async (_type: string, _message?: string) => ({ response: "yesButtonClicked" }),
 		})
-		const res2 = await hook.execute(approveTask, cmdUse)
-		expect(res2.shouldProceed).toBe(true)
+		const toolUse: any = { name: "write_to_file", params: { path: "src/foo.ts" } }
+
+		const res = await hook.execute(task, toolUse)
+		expect(res.shouldProceed).toBe(true)
+		expect(toolUse.params.intent_id).toBe("i1")
+		expect(toolUse.params.mutation_class).toBe("INTENT_EVOLUTION")
+	})
+
+	it("blocks mutating tools when intent_id does not match active intent", async () => {
+		const hook = new ScopeEnforcementHook()
+		const task = makeTask({
+			activeIntent: {
+				id: "i1",
+				context: `<intent_context><owned_scope><path>src</path></owned_scope></intent_context>`,
+			},
+		})
+		const toolUse: any = {
+			name: "write_to_file",
+			params: { path: "src/foo.ts", intent_id: "i2", mutation_class: "AST_REFACTOR" },
+		}
+
+		const res = await hook.execute(task, toolUse)
+		expect(res.shouldProceed).toBe(false)
+		const err = JSON.parse(res.errorMessage as string)
+		expect(err.error_type).toBe("intent_mismatch")
+		expect(err.provided_intent_id).toBe("i2")
+	})
+
+	it("blocks mutating tools when mutation_class is invalid", async () => {
+		const hook = new ScopeEnforcementHook()
+		const task = makeTask({
+			activeIntent: {
+				id: "i1",
+				context: `<intent_context><owned_scope><path>src</path></owned_scope></intent_context>`,
+			},
+		})
+		const toolUse: any = {
+			name: "write_to_file",
+			params: { path: "src/foo.ts", intent_id: "i1", mutation_class: "FREEFORM" },
+		}
+
+		const res = await hook.execute(task, toolUse)
+		expect(res.shouldProceed).toBe(false)
+		const err = JSON.parse(res.errorMessage as string)
+		expect(err.error_type).toBe("invalid_metadata")
+		expect(err.mutation_class).toBe("FREEFORM")
 	})
 })

@@ -12,6 +12,7 @@ import { fileExistsAtPath } from "../../utils/fs"
 import { EXPERIMENT_IDS, experiments } from "../../shared/experiments"
 import { sanitizeUnifiedDiff, computeDiffStats } from "../diff/stats"
 import type { ToolUse } from "../../shared/tools"
+import { buildStaleFileError, checkOptimisticLock } from "../../hooks/optimisticLock"
 
 import { BaseTool, ToolCallbacks } from "./BaseTool"
 
@@ -89,6 +90,14 @@ export class SearchReplaceTool extends BaseTool<"search_replace"> {
 				const errorMessage = `File not found: ${relPath}. Cannot perform search and replace on a non-existent file.`
 				await task.say("error", errorMessage)
 				pushToolResult(formatResponse.toolError(errorMessage))
+				return
+			}
+
+			const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+			if (staleError) {
+				task.recordToolError("search_replace", staleError)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(staleError))
 				return
 			}
 
@@ -205,13 +214,50 @@ export class SearchReplaceTool extends BaseTool<"search_replace"> {
 				return
 			}
 
+			const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+			if (staleAfterApproval) {
+				task.recordToolError("search_replace", staleAfterApproval)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(staleAfterApproval))
+				if (!isPreventFocusDisruptionEnabled) {
+					await task.diffViewProvider.revertChanges()
+				}
+				await task.diffViewProvider.reset()
+				this.resetPartialState()
+				return
+			}
+
 			// Save the changes
 			if (isPreventFocusDisruptionEnabled) {
 				// Direct file write without diff view or opening the file
 				await task.diffViewProvider.saveDirectly(relPath, newContent, false, diagnosticsEnabled, writeDelayMs)
 			} else {
 				// Call saveChanges to update the DiffViewProvider properties
-				await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+				const saveResult = await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+				if (saveResult?.saveError) {
+					if (saveResult.saveError.kind === "stale") {
+						const err = buildStaleFileError(
+							task,
+							this.name,
+							relPath,
+							newContent,
+							saveResult.finalContent ?? null,
+							"File changed during save; refresh before retrying",
+						)
+						task.recordToolError("search_replace", err)
+						task.didToolFailInCurrentTurn = true
+						pushToolResult(formatResponse.toolError(err))
+						await task.diffViewProvider.reset()
+						this.resetPartialState()
+						return
+					}
+					const errorMessage = `Failed to save '${relPath}': ${saveResult.saveError.message}`
+					await task.say("error", errorMessage)
+					pushToolResult(formatResponse.toolError(errorMessage))
+					await task.diffViewProvider.reset()
+					this.resetPartialState()
+					return
+				}
 			}
 
 			// Track file edit operation

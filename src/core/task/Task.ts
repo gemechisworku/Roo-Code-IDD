@@ -320,6 +320,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	// Tool Use
 	consecutiveMistakeCount: number = 0
 	consecutiveMistakeLimit: number
+
+	// Per-tool retry counters to prevent infinite retry loops when tools fail repeatedly
+	toolRetryCounts: Record<string, number> = {}
 	consecutiveMistakeCountForApplyDiff: Map<string, number> = new Map()
 	consecutiveMistakeCountForEditFile: Map<string, number> = new Map()
 	consecutiveNoToolUseCount: number = 0

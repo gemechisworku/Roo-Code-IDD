@@ -42,7 +42,9 @@ import { codebaseSearchTool } from "../tools/CodebaseSearchTool"
 import { HookEngine } from "../../hooks/HookEngine"
 import { ContextInjectorHook } from "../../hooks/ContextInjectorHook"
 import { ScopeEnforcementHook } from "../../hooks/ScopeEnforcementHook"
+import { TraceSnapshotHook } from "../../hooks/TraceSnapshotHook"
 import { TraceWriterHook } from "../../hooks/TraceWriterHook"
+import { LessonsLearnedHook } from "../../hooks/LessonsLearnedHook"
 
 import { formatResponse } from "../prompts/responses"
 import { sanitizeToolUseId } from "../../utils/tool-id"
@@ -82,8 +84,11 @@ export async function presentAssistantMessage(cline: Task) {
 	hookEngine.registerHook(new ContextInjectorHook())
 	// Phase 2: enforce scope and authorization boundary before destructive tools
 	hookEngine.registerHook(new ScopeEnforcementHook())
-	// Phase 3: simple trace writer to append intent-aware trace entries after mutating tools
+	// Phase 3: capture pre-mutation snapshots and append intent-aware trace entries after mutating tools
+	hookEngine.registerHook(new TraceSnapshotHook())
 	hookEngine.registerHook(new TraceWriterHook())
+	// Phase 4: append lessons learned on verification failures
+	hookEngine.registerHook(new LessonsLearnedHook())
 
 	if (cline.currentStreamingContentIndex >= cline.assistantMessageContent.length) {
 		// This may happen if the last content block was completed before
@@ -287,6 +292,7 @@ export async function presentAssistantMessage(cline: Task) {
 				askApproval,
 				handleError,
 				pushToolResult,
+				toolCallId,
 			})
 			break
 		}
@@ -722,6 +728,7 @@ export async function presentAssistantMessage(cline: Task) {
 							askApproval,
 							handleError,
 							pushToolResult,
+							toolCallId,
 						})
 					})
 					break
@@ -732,6 +739,7 @@ export async function presentAssistantMessage(cline: Task) {
 							askApproval,
 							handleError,
 							pushToolResult,
+							toolCallId,
 						})
 					})
 					break
@@ -740,47 +748,63 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "apply_diff":
-					await checkpointSaveAndMark(cline)
-					await applyDiffToolClass.handle(cline, block as ToolUse<"apply_diff">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await applyDiffToolClass.handle(cline, block as ToolUse<"apply_diff">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+							toolCallId,
+						})
 					})
 					break
 				case "edit":
 				case "search_and_replace":
-					await checkpointSaveAndMark(cline)
-					await editTool.handle(cline, block as ToolUse<"edit">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await editTool.handle(cline, block as ToolUse<"edit">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+							toolCallId,
+						})
 					})
 					break
 				case "search_replace":
-					await checkpointSaveAndMark(cline)
-					await searchReplaceTool.handle(cline, block as ToolUse<"search_replace">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await searchReplaceTool.handle(cline, block as ToolUse<"search_replace">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+							toolCallId,
+						})
 					})
 					break
 				case "edit_file":
-					await checkpointSaveAndMark(cline)
-					await editFileTool.handle(cline, block as ToolUse<"edit_file">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await editFileTool.handle(cline, block as ToolUse<"edit_file">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+							toolCallId,
+						})
 					})
 					break
 				case "apply_patch":
-					await checkpointSaveAndMark(cline)
-					await applyPatchTool.handle(cline, block as ToolUse<"apply_patch">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await applyPatchTool.handle(cline, block as ToolUse<"apply_patch">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+							toolCallId,
+						})
 					})
 					break
 				case "read_file":
@@ -789,6 +813,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "list_files":
@@ -796,6 +821,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "codebase_search":
@@ -803,6 +829,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "search_files":
@@ -810,13 +837,17 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "execute_command":
-					await executeCommandTool.handle(cline, block as ToolUse<"execute_command">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await executeCommandTool.handle(cline, block as ToolUse<"execute_command">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+							toolCallId,
+						})
 					})
 					break
 				case "read_command_output":
@@ -824,6 +855,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "use_mcp_tool":
@@ -831,6 +863,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "access_mcp_resource":
@@ -838,6 +871,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "ask_followup_question":
@@ -845,6 +879,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "switch_mode":
@@ -852,6 +887,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "new_task":
@@ -883,6 +919,7 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "skill":
@@ -890,14 +927,18 @@ export async function presentAssistantMessage(cline: Task) {
 						askApproval,
 						handleError,
 						pushToolResult,
+						toolCallId,
 					})
 					break
 				case "generate_image":
-					await checkpointSaveAndMark(cline)
-					await generateImageTool.handle(cline, block as ToolUse<"generate_image">, {
-						askApproval,
-						handleError,
-						pushToolResult,
+					await executeToolWithHooks(async () => {
+						await checkpointSaveAndMark(cline)
+						await generateImageTool.handle(cline, block as ToolUse<"generate_image">, {
+							askApproval,
+							handleError,
+							pushToolResult,
+							toolCallId,
+						})
 					})
 					break
 				default: {

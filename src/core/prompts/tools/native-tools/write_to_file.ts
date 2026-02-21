@@ -15,6 +15,10 @@ const PATH_PARAMETER_DESCRIPTION = `The path of the file to write to (relative t
 
 const CONTENT_PARAMETER_DESCRIPTION = `The content to write to the file. ALWAYS provide the COMPLETE intended content of the file, without any truncation or omissions. You MUST include ALL parts of the file, even if they haven't been modified. Do NOT include line numbers in the content.`
 
+const INTENT_ID_PARAMETER_DESCRIPTION = `The active intent ID that authorizes this mutation (must match an IN_PROGRESS intent in .orchestration/active_intents.yaml).`
+
+const MUTATION_CLASS_PARAMETER_DESCRIPTION = `Mutation class for traceability. Must be one of "AST_REFACTOR" or "INTENT_EVOLUTION".`
+
 export default {
 	type: "function",
 	function: {
@@ -32,8 +36,16 @@ export default {
 					type: "string",
 					description: CONTENT_PARAMETER_DESCRIPTION,
 				},
+				intent_id: {
+					type: "string",
+					description: INTENT_ID_PARAMETER_DESCRIPTION,
+				},
+				mutation_class: {
+					type: "string",
+					description: MUTATION_CLASS_PARAMETER_DESCRIPTION,
+				},
 			},
-			required: ["path", "content"],
+			required: ["path", "content", "intent_id", "mutation_class"],
 			additionalProperties: false,
 		},
 	},

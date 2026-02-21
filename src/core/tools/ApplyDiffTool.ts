@@ -13,6 +13,7 @@ import { unescapeHtmlEntities } from "../../utils/text-normalization"
 import { EXPERIMENT_IDS, experiments } from "../../shared/experiments"
 import { computeDiffStats, sanitizeUnifiedDiff } from "../diff/stats"
 import type { ToolUse } from "../../shared/tools"
+import { buildStaleFileError, checkOptimisticLock } from "../../hooks/optimisticLock"
 
 import { BaseTool, ToolCallbacks } from "./BaseTool"
 
@@ -65,6 +66,14 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 				await task.say("error", formattedError)
 				task.didToolFailInCurrentTurn = true
 				pushToolResult(formattedError)
+				return
+			}
+
+			const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+			if (staleError) {
+				task.recordToolError("apply_diff", staleError)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(staleError))
 				return
 			}
 
@@ -172,6 +181,16 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 					return
 				}
 
+				const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+				if (staleAfterApproval) {
+					task.recordToolError("apply_diff", staleAfterApproval)
+					task.didToolFailInCurrentTurn = true
+					pushToolResult(formatResponse.toolError(staleAfterApproval))
+					await task.diffViewProvider.reset()
+					this.resetPartialState()
+					return
+				}
+
 				// Save directly without showing diff view or opening the file
 				task.diffViewProvider.editType = "modify"
 				task.diffViewProvider.originalContent = originalContent
@@ -218,8 +237,43 @@ export class ApplyDiffTool extends BaseTool<"apply_diff"> {
 					return
 				}
 
+				const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+				if (staleAfterApproval) {
+					task.recordToolError("apply_diff", staleAfterApproval)
+					task.didToolFailInCurrentTurn = true
+					pushToolResult(formatResponse.toolError(staleAfterApproval))
+					await task.diffViewProvider.revertChanges()
+					await task.diffViewProvider.reset()
+					this.resetPartialState()
+					return
+				}
+
 				// Call saveChanges to update the DiffViewProvider properties
-				await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+				const saveResult = await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+				if (saveResult?.saveError) {
+					if (saveResult.saveError.kind === "stale") {
+						const err = buildStaleFileError(
+							task,
+							this.name,
+							relPath,
+							diffResult.content,
+							saveResult.finalContent ?? null,
+							"File changed during save; refresh before retrying",
+						)
+						task.recordToolError("apply_diff", err)
+						task.didToolFailInCurrentTurn = true
+						pushToolResult(formatResponse.toolError(err))
+						await task.diffViewProvider.reset()
+						this.resetPartialState()
+						return
+					}
+					const errorMessage = `Failed to save '${relPath}': ${saveResult.saveError.message}`
+					await task.say("error", errorMessage)
+					pushToolResult(formatResponse.toolError(errorMessage))
+					await task.diffViewProvider.reset()
+					this.resetPartialState()
+					return
+				}
 			}
 
 			// Track file edit operation

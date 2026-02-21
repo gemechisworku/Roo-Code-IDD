@@ -1,0 +1,44 @@
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T13:54:17.936Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T13:54:22.577Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T13:54:40.257Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T13:54:42.853Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"rejected","reason":"unknown_targets","timestamp":"2026-02-20T13:54:53.820Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"rejected","reason":"unknown_targets","timestamp":"2026-02-20T13:54:55.638Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"rejected","reason":"unknown_targets","timestamp":"2026-02-20T13:55:05.791Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T14:11:58.527Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T14:12:03.052Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"destructive_command","command":"","command_classification":"destructive","timestamp":"2026-02-20T14:21:08.366Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"safe_command","command":"dir","command_classification":"safe","timestamp":"2026-02-20T14:21:08.397Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"reused_approval","command":"","command_classification":"destructive","timestamp":"2026-02-20T14:22:24.696Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"safe_command","command":"type _qa_in_scope.txt","command_classification":"safe","timestamp":"2026-02-20T14:22:24.720Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"safe_command","command":"type _qa_in_scope.txt","command_classification":"safe","timestamp":"2026-02-20T14:22:24.722Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"safe_command","command":"type _qa_in_scope.txt","command_classification":"safe","timestamp":"2026-02-20T14:22:24.970Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"safe_command","command":"type _qa_in_scope.txt","command_classification":"safe","timestamp":"2026-02-20T14:22:24.973Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"reused_approval","command":"","command_classification":"destructive","timestamp":"2026-02-20T14:22:57.623Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"safe_command","command":"dir /s /b _qa_in_scope.txt","command_classification":"safe","timestamp":"2026-02-20T14:22:57.639Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"safe_command","command":"dir /s /b _qa_in_scope.txt","command_classification":"safe","timestamp":"2026-02-20T14:22:57.916Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"safe_command","command":"dir /s /b _qa_in_scope.txt","command_classification":"safe","timestamp":"2026-02-20T14:22:57.919Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T14:25:44.388Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T14:25:52.719Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"reused_approval","command":"","command_classification":"destructive","timestamp":"2026-02-20T14:34:01.739Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"destructive_command","command":"powershell -Command Get-ChildItem","command_classification":"destructive","timestamp":"2026-02-20T14:34:17.121Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"reused_approval","command":"powershell -Command Get-ChildItem","command_classification":"destructive","timestamp":"2026-02-20T14:34:17.205Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T14:35:25.385Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T14:35:27.779Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"reused_approval","command":"","command_classification":"destructive","timestamp":"2026-02-20T14:41:22.420Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"rejected","reason":"destructive_command","command":"powershell -Command \"Remove-Item -Force _qa_handshake.txt\"","command_classification":"destructive","timestamp":"2026-02-20T14:41:51.032Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"rejected","reason":"destructive_command","command":"powershell -Command \"Remove-Item -Force _qa_handshake.txt\"","command_classification":"destructive","timestamp":"2026-02-20T14:41:53.131Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"reused_approval","command":"","command_classification":"destructive","timestamp":"2026-02-20T14:42:11.085Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"rejected","reason":"destructive_command","command":"powershell -Command \"Remove-","command_classification":"destructive","timestamp":"2026-02-20T14:42:16.374Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"rejected","reason":"destructive_command","command":"powershell -Command \"Remove-Item -Force _qa_handshake.txt\"","command_classification":"destructive","timestamp":"2026-02-20T14:42:18.053Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"reused_approval","command":"","command_classification":"destructive","timestamp":"2026-02-20T14:43:28.895Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"destructive_command","command":"powershell -Command \"Get-Content","command_classification":"destructive","timestamp":"2026-02-20T14:43:36.045Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"destructive_command","command":"powershell -Command \"Get-Content -Raw _qa_handshake.txt\"","command_classification":"destructive","timestamp":"2026-02-20T14:43:40.266Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"approved","reason":"safe_command","command":"powershell -Command \"Get-ChildItem\"","command_classification":"safe","timestamp":"2026-02-20T14:58:11.648Z"}
+{"intent_id":"INT-001","tool":"execute_command","decision":"rejected","reason":"destructive_command","command":"powershell -Command \"Remove-Item -Path '_qa_handshake.txt' -ErrorAction Stop\"","command_classification":"destructive","timestamp":"2026-02-20T15:00:06.151Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T15:31:37.509Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T15:31:40.238Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T15:31:54.481Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T15:31:57.211Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T15:32:42.804Z"}
+{"intent_id":"INT-001","tool":"apply_patch","decision":"approved","reason":"unknown_targets","timestamp":"2026-02-20T15:32:45.312Z"}

@@ -15,6 +15,7 @@ import { unescapeHtmlEntities } from "../../utils/text-normalization"
 import { EXPERIMENT_IDS, experiments } from "../../shared/experiments"
 import { convertNewFileToUnifiedDiff, computeDiffStats, sanitizeUnifiedDiff } from "../diff/stats"
 import type { ToolUse } from "../../shared/tools"
+import { buildStaleFileError, checkOptimisticLock } from "../../hooks/optimisticLock"
 
 import { BaseTool, ToolCallbacks } from "./BaseTool"
 
@@ -85,6 +86,35 @@ export class WriteToFileTool extends BaseTool<"write_to_file"> {
 			newContent = unescapeHtmlEntities(newContent)
 		}
 
+		if (fileExists) {
+			try {
+				const currentContent = await fs.readFile(absolutePath, "utf8")
+				if (currentContent === newContent) {
+					pushToolResult(`No changes needed for '${relPath}'`)
+					await task.diffViewProvider.reset()
+					this.resetPartialState()
+					return
+				}
+			} catch (error) {
+				task.consecutiveMistakeCount++
+				task.recordToolError("write_to_file")
+				const errorMessage = `Failed to read file '${relPath}'. Please verify file permissions and try again.`
+				await task.say("error", errorMessage)
+				pushToolResult(formatResponse.toolError(errorMessage))
+				await task.diffViewProvider.reset()
+				this.resetPartialState()
+				return
+			}
+		}
+
+		const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+		if (staleError) {
+			task.recordToolError("write_to_file", staleError)
+			task.didToolFailInCurrentTurn = true
+			pushToolResult(formatResponse.toolError(staleError))
+			return
+		}
+
 		const fullPath = relPath ? path.resolve(task.cwd, relPath) : ""
 		const isOutsideWorkspace = isPathOutsideWorkspace(fullPath)
 
@@ -133,6 +163,16 @@ export class WriteToFileTool extends BaseTool<"write_to_file"> {
 					return
 				}
 
+				const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+				if (staleAfterApproval) {
+					task.recordToolError("write_to_file", staleAfterApproval)
+					task.didToolFailInCurrentTurn = true
+					pushToolResult(formatResponse.toolError(staleAfterApproval))
+					await task.diffViewProvider.reset()
+					this.resetPartialState()
+					return
+				}
+
 				await task.diffViewProvider.saveDirectly(relPath, newContent, false, diagnosticsEnabled, writeDelayMs)
 			} else {
 				if (!task.diffViewProvider.isEditing) {
@@ -166,7 +206,42 @@ export class WriteToFileTool extends BaseTool<"write_to_file"> {
 					return
 				}
 
-				await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+				const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
+				if (staleAfterApproval) {
+					task.recordToolError("write_to_file", staleAfterApproval)
+					task.didToolFailInCurrentTurn = true
+					pushToolResult(formatResponse.toolError(staleAfterApproval))
+					await task.diffViewProvider.revertChanges()
+					await task.diffViewProvider.reset()
+					this.resetPartialState()
+					return
+				}
+
+				const saveResult = await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+				if (saveResult?.saveError) {
+					if (saveResult.saveError.kind === "stale") {
+						const err = buildStaleFileError(
+							task,
+							this.name,
+							relPath,
+							newContent,
+							saveResult.finalContent ?? null,
+							"File changed during save; refresh before retrying",
+						)
+						task.recordToolError("write_to_file", err)
+						task.didToolFailInCurrentTurn = true
+						pushToolResult(formatResponse.toolError(err))
+						await task.diffViewProvider.reset()
+						this.resetPartialState()
+						return
+					}
+					const errorMessage = `Failed to save '${relPath}': ${saveResult.saveError.message}`
+					await task.say("error", errorMessage)
+					pushToolResult(formatResponse.toolError(errorMessage))
+					await task.diffViewProvider.reset()
+					this.resetPartialState()
+					return
+				}
 			}
 
 			if (relPath) {

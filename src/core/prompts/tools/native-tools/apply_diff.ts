@@ -11,6 +11,10 @@ const DIFF_PARAMETER_DESCRIPTION = `A string containing one or more search/repla
 [new content to replace with]
 >>>>>>> REPLACE`
 
+const INTENT_ID_PARAMETER_DESCRIPTION = `The active intent ID that authorizes this mutation (must match an IN_PROGRESS intent in .orchestration/active_intents.yaml).`
+
+const MUTATION_CLASS_PARAMETER_DESCRIPTION = `Mutation class for traceability. Must be one of "AST_REFACTOR" or "INTENT_EVOLUTION".`
+
 export const apply_diff = {
 	type: "function",
 	function: {
@@ -27,8 +31,16 @@ export const apply_diff = {
 					type: "string",
 					description: DIFF_PARAMETER_DESCRIPTION,
 				},
+				intent_id: {
+					type: "string",
+					description: INTENT_ID_PARAMETER_DESCRIPTION,
+				},
+				mutation_class: {
+					type: "string",
+					description: MUTATION_CLASS_PARAMETER_DESCRIPTION,
+				},
 			},
-			required: ["path", "diff"],
+			required: ["path", "diff", "intent_id", "mutation_class"],
 			additionalProperties: false,
 		},
 	},
