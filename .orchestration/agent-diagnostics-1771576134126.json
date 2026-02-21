@@ -1,0 +1,17 @@
+{
+	"toolUse": {
+		"type": "tool_use",
+		"name": "select_active_intent",
+		"params": {
+			"intent_id": ""
+		},
+		"partial": true,
+		"nativeArgs": {
+			"intent_id": ""
+		},
+		"id": "call_MYqHBP2Dmg0fTjfH3KwyUo7j"
+	},
+	"nativeIntent": null,
+	"paramsIntent": null,
+	"inputIntent": null
+}

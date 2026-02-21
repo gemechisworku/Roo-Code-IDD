@@ -454,6 +454,7 @@ export const ChatRowContent = ({
 				}
 
 				// Regular single file diff
+				const isDestructive = tool.isDestructive === true
 				return (
 					<>
 						<div style={headerStyle}>
@@ -462,17 +463,40 @@ export const ChatRowContent = ({
 									className="codicon codicon-lock"
 									style={{ color: "var(--vscode-editorWarning-foreground)", marginBottom: "-1.5px" }}
 								/>
+							) : isDestructive ? (
+								<Trash2
+									className="w-4 shrink-0"
+									aria-label="Destructive delete icon"
+									style={{ color: "var(--vscode-errorForeground)" }}
+								/>
 							) : (
 								toolIcon("diff")
 							)}
-							<span style={{ fontWeight: "bold" }}>
+							<span
+								style={{
+									fontWeight: "bold",
+									color: isDestructive ? "var(--vscode-errorForeground)" : undefined,
+								}}>
 								{tool.isProtected
 									? t("chat:fileOperations.wantsToEditProtected")
 									: tool.isOutsideWorkspace
 										? t("chat:fileOperations.wantsToEditOutsideWorkspace")
-										: t("chat:fileOperations.wantsToEdit")}
+										: isDestructive
+											? t("chat:fileOperations.wantsToDelete")
+											: t("chat:fileOperations.wantsToEdit")}
 							</span>
 						</div>
+						{isDestructive && (
+							<div
+								className="pl-6 text-xs"
+								style={{
+									color: "var(--vscode-errorForeground)",
+									marginTop: "-6px",
+									marginBottom: "6px",
+								}}>
+								{t("chat:checkpoint.menu.cannotUndo")}
+							</div>
+						)}
 						<div className="pl-6">
 							<CodeAccordian
 								path={tool.path}

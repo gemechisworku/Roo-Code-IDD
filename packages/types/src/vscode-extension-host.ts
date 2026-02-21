@@ -781,6 +781,7 @@ export interface ClineSayTool {
 	matchCount?: number
 	diff?: string
 	content?: string
+	isDestructive?: boolean
 	// Unified diff statistics computed by the extension
 	diffStats?: { added: number; removed: number }
 	regex?: string

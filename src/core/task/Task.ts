@@ -72,6 +72,7 @@ import { ClineAskResponse } from "../../shared/WebviewMessage"
 import { defaultModeSlug, getModeBySlug } from "../../shared/modes"
 import { DiffStrategy, type ToolUse, type ToolParamName, toolParamNames } from "../../shared/tools"
 import { getModelMaxOutputTokens } from "../../shared/api"
+import type { UserIntentClassification } from "../../shared/user-intent"
 
 // services
 import { McpHub } from "../../services/mcp/McpHub"
@@ -316,6 +317,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private askResponseImages?: string[]
 	public lastMessageTs?: number
 	private autoApprovalTimeoutRef?: NodeJS.Timeout
+	lastUserMessageText?: string
+	lastUserMessageTs?: number
+	lastUserIntentClassification?: UserIntentClassification
+	destructiveIntentApprovals?: Map<string, boolean>
 
 	// Tool Use
 	consecutiveMistakeCount: number = 0
@@ -472,6 +477,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.metadata = {
 			task: historyItem ? historyItem.task : task,
 			images: historyItem ? [] : images,
+		}
+		if (task) {
+			this.lastUserMessageText = task.trim()
+			this.lastUserMessageTs = Date.now()
 		}
 
 		// Normal use-case is usually retry similar history task with new workspace.
@@ -1516,6 +1525,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// Suppress the checkpoint_saved chat row for this particular checkpoint to keep the timeline clean.
 		if (askResponse === "messageResponse") {
 			void this.checkpointSave(false, true)
+			this.lastUserMessageText = (text ?? "").trim()
+			this.lastUserMessageTs = Date.now()
+			this.lastUserIntentClassification = undefined
+			this.destructiveIntentApprovals = undefined
 		}
 
 		// Mark the last follow-up question as answered

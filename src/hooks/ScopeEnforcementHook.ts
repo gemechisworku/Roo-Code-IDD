@@ -14,6 +14,8 @@ import { unescapeHtmlEntities } from "../utils/text-normalization"
 import { extractTargetPaths } from "./traceUtils"
 import { getStaleFileBlock, clearStaleFile } from "./optimisticLock"
 import { appendWithLock } from "./appendWithLock"
+import type { UserIntentClassification } from "../shared/user-intent"
+import { classifyUserIntent, hashUserMessage } from "./UserIntentClassifier"
 
 /**
  * Scope Enforcement Hook
@@ -33,14 +35,14 @@ export class ScopeEnforcementHook implements PreToolHook {
 			return { shouldProceed: true }
 		}
 
-		// Only apply enforcement for classified destructive tools
-		if (!isDestructiveTool(toolUse.name)) {
-			return { shouldProceed: true }
-		}
+		const isSelectActiveIntent = toolUse.name === "select_active_intent"
+		const isExecuteCommand = toolUse.name === "execute_command"
+		const isDestructiveToolUse = isDestructiveTool(toolUse.name)
+		const requiresIntent = isExecuteCommand || isDestructiveToolUse
 
 		// Load active intent information from task state (set by ContextInjectorHook)
 		let activeIntent: any = (task as any).activeIntent
-		if (!activeIntent || !activeIntent.id) {
+		if (requiresIntent && (!activeIntent || !activeIntent.id)) {
 			return {
 				shouldProceed: false,
 				errorMessage:
@@ -49,99 +51,31 @@ export class ScopeEnforcementHook implements PreToolHook {
 		}
 
 		// Check .orchestration/.intentignore - if intent id is listed, skip enforcement
-		try {
-			const orchestrationDir = path.join(cwd, ".orchestration")
-			const ignoreFile = path.join(orchestrationDir, ".intentignore")
-			const txt = await fs.readFile(ignoreFile, "utf-8")
-			const lines = txt
-				.split(/\r?\n/)
-				.map((l) => l.trim())
-				.filter(Boolean)
-				.filter((l) => !l.startsWith("#"))
-			if (lines.includes(activeIntent.id)) {
-				return { shouldProceed: true }
-			}
-		} catch {
-			// ignore missing file
-		}
-
-		// Metadata enforcement for mutating tools
-		if (isMutatingTool(toolUse.name)) {
-			const targetPaths = this.extractPathsFromToolUse(toolUse)
-			const blocked = targetPaths.filter((p) => getStaleFileBlock(task, p))
-			if (blocked.length > 0) {
-				const diagEntry = {
-					ts: new Date().toISOString(),
-					hook: this.name,
-					event: "stale_lock",
-					tool: toolUse.name,
-					path: blocked[0],
+		if (activeIntent?.id) {
+			try {
+				const orchestrationDir = path.join(cwd, ".orchestration")
+				const ignoreFile = path.join(orchestrationDir, ".intentignore")
+				const txt = await fs.readFile(ignoreFile, "utf-8")
+				const lines = txt
+					.split(/\r?\n/)
+					.map((l) => l.trim())
+					.filter(Boolean)
+					.filter((l) => !l.startsWith("#"))
+				if (lines.includes(activeIntent.id)) {
+					return { shouldProceed: true }
 				}
-				console.log("[agent-diagnostics][stale-lock]", diagEntry)
-				try {
-					const diagPath = path.resolve(task.cwd, ".orchestration", "agent-diagnostics.jsonl")
-					await appendWithLock(diagPath, JSON.stringify(diagEntry) + "\n")
-				} catch {
-					// best-effort only
-				}
-
-				const approved = await this.promptApproval(
-					`The file '${blocked[0]}' changed since the last attempt. Approve overriding the stale lock and proceed?`,
-				)
-				if (!approved) {
-					;(task as any).didRejectTool = true
-					const err = {
-						error_type: "stale_lock",
-						code: "REQ-007",
-						intent_id: activeIntent.id,
-						tool: toolUse.name,
-						message: "Stale file lock active; read file and retry or explicitly approve override",
-					}
-					return { shouldProceed: false, errorMessage: serializeHookError(err, { path: blocked[0] }) }
-				}
-
-				blocked.forEach((p) => clearStaleFile(task, p))
-			}
-
-			const metadata = this.getMutationMetadata(toolUse)
-			const autoIntentId = metadata.intent_id ?? activeIntent.id
-			const autoMutationClass = metadata.mutation_class ?? "INTENT_EVOLUTION"
-
-			if (!metadata.intent_id || !metadata.mutation_class) {
-				this.applyMutationMetadata(toolUse, autoIntentId, autoMutationClass)
-			}
-
-			if (autoIntentId !== activeIntent.id) {
-				const err = {
-					error_type: "intent_mismatch",
-					code: "REQ-004",
-					intent_id: activeIntent.id,
-					message: "Provided intent_id does not match active intent",
-				}
-				return {
-					shouldProceed: false,
-					errorMessage: serializeHookError(err, { provided_intent_id: autoIntentId }),
-				}
-			}
-
-			const mutationClass = autoMutationClass
-			const allowed = new Set(["AST_REFACTOR", "INTENT_EVOLUTION"])
-			if (!mutationClass || !allowed.has(mutationClass)) {
-				const err = {
-					error_type: "invalid_metadata",
-					code: "REQ-005",
-					intent_id: activeIntent.id,
-					message: "mutation_class must be AST_REFACTOR or INTENT_EVOLUTION",
-				}
-				return {
-					shouldProceed: false,
-					errorMessage: serializeHookError(err, { mutation_class: mutationClass }),
-				}
+			} catch {
+				// ignore missing file
 			}
 		}
 
-		// Special handling: execute_command classification + approval
-		if (toolUse.name === "execute_command") {
+		const targetPaths = this.extractPathsFromToolUse(toolUse)
+		let intentClassification: UserIntentClassification | null = null
+		if (activeIntent?.id && !isSelectActiveIntent && !isExecuteCommand) {
+			intentClassification = await this.getUserIntentClassification(task, toolUse, targetPaths)
+		}
+
+		if (isExecuteCommand) {
 			const cmdRaw = (toolUse.nativeArgs as any)?.command || (toolUse.params as any)?.command
 			const command = unescapeHtmlEntities(String(cmdRaw ?? ""))
 			const logger =
@@ -229,8 +163,133 @@ export class ScopeEnforcementHook implements PreToolHook {
 			return { shouldProceed: true }
 		}
 
-		// Extract paths targeted by the tool
-		const targetPaths = this.extractPathsFromToolUse(toolUse)
+		if (!isDestructiveToolUse) {
+			if (intentClassification?.verdict === "destructive") {
+				const approvalKey = this.getDestructiveApprovalKey(intentClassification, toolUse, targetPaths)
+				const prior = approvalKey ? this.getDestructiveIntentApproval(task, approvalKey) : undefined
+				if (prior === true) {
+					return { shouldProceed: true }
+				}
+				if (prior === false) {
+					const err = {
+						error_type: "destructive_intent_denied",
+						code: "REQ-009",
+						intent_id: activeIntent?.id ?? "",
+						tool: toolUse.name,
+						message: "User denied destructive intent confirmation",
+					}
+					return { shouldProceed: false, errorMessage: serializeHookError(err) }
+				}
+
+				const approved = await this.promptApproval(
+					`The user request was classified as DESTRUCTIVE. Approve proceeding with this intent?`,
+				)
+
+				if (approvalKey) {
+					this.setDestructiveIntentApproval(task, approvalKey, approved)
+				}
+
+				this.recordDecision(task, {
+					intent_id: activeIntent?.id ?? "",
+					tool: toolUse.name,
+					decision: approved ? "approved" : "rejected",
+					reason: "destructive_intent_preflight",
+					targets: targetPaths,
+					intent_classification: intentClassification ?? undefined,
+				})
+
+				if (!approved) {
+					const err = {
+						error_type: "destructive_intent_denied",
+						code: "REQ-009",
+						intent_id: activeIntent?.id ?? "",
+						tool: toolUse.name,
+						message: "User denied destructive intent confirmation",
+					}
+					return { shouldProceed: false, errorMessage: serializeHookError(err, { targets: targetPaths }) }
+				}
+			}
+			return { shouldProceed: true }
+		}
+
+		// Metadata enforcement for mutating tools
+		if (isMutatingTool(toolUse.name)) {
+			const blocked = targetPaths.filter((p) => getStaleFileBlock(task, p))
+			if (blocked.length > 0) {
+				const diagEntry = {
+					ts: new Date().toISOString(),
+					hook: this.name,
+					event: "stale_lock",
+					tool: toolUse.name,
+					path: blocked[0],
+				}
+				console.log("[agent-diagnostics][stale-lock]", diagEntry)
+				try {
+					const diagPath = path.resolve(task.cwd, ".orchestration", "agent-diagnostics.jsonl")
+					await appendWithLock(diagPath, JSON.stringify(diagEntry) + "\n")
+				} catch {
+					// best-effort only
+				}
+
+				const approved = await this.promptApproval(
+					`The file '${blocked[0]}' changed since the last attempt. Approve overriding the stale lock and proceed?`,
+				)
+				if (!approved) {
+					;(task as any).didRejectTool = true
+					const err = {
+						error_type: "stale_lock",
+						code: "REQ-007",
+						intent_id: activeIntent.id,
+						tool: toolUse.name,
+						message: "Stale file lock active; read file and retry or explicitly approve override",
+					}
+					return { shouldProceed: false, errorMessage: serializeHookError(err, { path: blocked[0] }) }
+				}
+
+				blocked.forEach((p) => clearStaleFile(task, p))
+			}
+
+			const metadata = this.getMutationMetadata(toolUse)
+			const autoIntentId = metadata.intent_id ?? activeIntent.id
+			const autoMutationClass = metadata.mutation_class ?? "INTENT_EVOLUTION"
+
+			if (!metadata.intent_id || !metadata.mutation_class) {
+				this.applyMutationMetadata(toolUse, autoIntentId, autoMutationClass)
+			}
+
+			if (autoIntentId !== activeIntent.id) {
+				const err = {
+					error_type: "intent_mismatch",
+					code: "REQ-004",
+					intent_id: activeIntent.id,
+					message: "Provided intent_id does not match active intent",
+				}
+				return {
+					shouldProceed: false,
+					errorMessage: serializeHookError(err, { provided_intent_id: autoIntentId }),
+				}
+			}
+
+			const mutationClass = autoMutationClass
+			const allowed = new Set(["AST_REFACTOR", "INTENT_EVOLUTION"])
+			if (!mutationClass || !allowed.has(mutationClass)) {
+				const err = {
+					error_type: "invalid_metadata",
+					code: "REQ-005",
+					intent_id: activeIntent.id,
+					message: "mutation_class must be AST_REFACTOR or INTENT_EVOLUTION",
+				}
+				return {
+					shouldProceed: false,
+					errorMessage: serializeHookError(err, { mutation_class: mutationClass }),
+				}
+			}
+		}
+
+		const destructiveOpInfo = this.getDestructiveOperationInfo(toolUse)
+		const requiresDestructivePrompt =
+			isMutatingTool(toolUse.name) &&
+			(destructiveOpInfo.isDestructive || intentClassification?.verdict === "destructive")
 
 		if (!targetPaths || targetPaths.length === 0) {
 			const approved = await this.promptApproval(
@@ -257,6 +316,7 @@ export class ScopeEnforcementHook implements PreToolHook {
 
 		// Determine owned scope roots for the active intent
 		const ownedScope: string[] = this.getOwnedScopeFromTask(activeIntent)
+		const scopeViolations: string[] = []
 
 		// Validate each target path is within an owned scope
 		for (const p of targetPaths) {
@@ -267,25 +327,80 @@ export class ScopeEnforcementHook implements PreToolHook {
 			})
 
 			if (!allowed) {
-				const approved = await this.promptApproval(
-					`The agent wants to modify '${p}', which is outside the intent's owned scope. Approve?`,
-				)
-				this.recordDecision(task, {
+				scopeViolations.push(p)
+			}
+		}
+
+		if (requiresDestructivePrompt && scopeViolations.length === 0) {
+			const approvalKey = this.getDestructiveApprovalKey(intentClassification, toolUse, targetPaths)
+			const prior = approvalKey ? this.getDestructiveIntentApproval(task, approvalKey) : undefined
+			if (prior === true) {
+				return { shouldProceed: true }
+			}
+			if (prior === false) {
+				const err = {
+					error_type: "destructive_operation_denied",
+					code: "REQ-008",
 					intent_id: activeIntent.id,
 					tool: toolUse.name,
-					decision: approved ? "approved" : "rejected",
-					reason: "scope_violation",
-					targets: [p],
-				})
-				if (!approved) {
-					const err = {
-						error_type: "scope_violation",
-						code: "REQ-001",
-						intent_id: activeIntent.id,
-						message: `Intent not authorized to edit ${p}`,
-					}
-					return { shouldProceed: false, errorMessage: serializeHookError(err, { filename: p }) }
+					message: "User denied destructive operation",
 				}
+				return { shouldProceed: false, errorMessage: serializeHookError(err) }
+			}
+
+			const summary = this.buildDestructiveSummary(toolUse, destructiveOpInfo, targetPaths)
+			const classifierNote =
+				intentClassification?.verdict === "destructive"
+					? `User request classified as destructive (${intentClassification.reason || "llm"}).`
+					: ""
+			const approved = await this.promptApproval(
+				`The agent is about to perform a DESTRUCTIVE operation (${summary}). ${classifierNote} Approve?`,
+			)
+
+			if (approvalKey) {
+				this.setDestructiveIntentApproval(task, approvalKey, approved)
+			}
+
+			this.recordDecision(task, {
+				intent_id: activeIntent.id,
+				tool: toolUse.name,
+				decision: approved ? "approved" : "rejected",
+				reason: "destructive_intent",
+				targets: targetPaths,
+				intent_classification: intentClassification ?? undefined,
+			})
+
+			if (!approved) {
+				const err = {
+					error_type: "destructive_operation_denied",
+					code: "REQ-008",
+					intent_id: activeIntent.id,
+					tool: toolUse.name,
+					message: "User denied destructive operation",
+				}
+				return { shouldProceed: false, errorMessage: serializeHookError(err, { targets: targetPaths }) }
+			}
+		}
+
+		for (const p of scopeViolations) {
+			const approved = await this.promptApproval(
+				`The agent is attempting a destructive operation (${toolUse.name}) on '${p}', which is outside the intent's owned scope. Approve?`,
+			)
+			this.recordDecision(task, {
+				intent_id: activeIntent.id,
+				tool: toolUse.name,
+				decision: approved ? "approved" : "rejected",
+				reason: "scope_violation",
+				targets: [p],
+			})
+			if (!approved) {
+				const err = {
+					error_type: "scope_violation",
+					code: "REQ-001",
+					intent_id: activeIntent.id,
+					message: `Intent not authorized to edit ${p}`,
+				}
+				return { shouldProceed: false, errorMessage: serializeHookError(err, { filename: p }) }
 			}
 		}
 
@@ -347,6 +462,134 @@ export class ScopeEnforcementHook implements PreToolHook {
 		return false
 	}
 
+	private async logDiagnostics(task: Task, payload: Record<string, unknown>): Promise<void> {
+		const entry = {
+			ts: new Date().toISOString(),
+			hook: this.name,
+			...payload,
+		}
+		console.log("[agent-diagnostics][scope-enforcement]", entry)
+		if (process.env.NODE_ENV === "test") {
+			return
+		}
+		try {
+			const diagPath = path.resolve(task.cwd, ".orchestration", "agent-diagnostics.jsonl")
+			await appendWithLock(diagPath, JSON.stringify(entry) + "\n")
+		} catch {
+			// best-effort only
+		}
+	}
+
+	private async getUserIntentClassification(
+		task: Task,
+		toolUse: ToolUse,
+		targetPaths: string[],
+	): Promise<UserIntentClassification | null> {
+		const userText = (task as any).lastUserMessageText as string | undefined
+		if (!userText || !userText.trim()) {
+			return null
+		}
+
+		const messageHash = hashUserMessage(userText)
+		const cached = (task as any).lastUserIntentClassification as UserIntentClassification | undefined
+		if (cached && cached.messageHash === messageHash) {
+			return cached
+		}
+
+		const classification = await classifyUserIntent(userText, (task as any).apiConfiguration, {
+			tool: toolUse.name,
+			targets: targetPaths,
+		})
+		const result: UserIntentClassification = { ...classification, messageHash }
+		;(task as any).lastUserIntentClassification = result
+
+		await this.logDiagnostics(task, {
+			event: "intent_classification",
+			tool: toolUse.name,
+			verdict: result.verdict,
+			source: result.source,
+			confidence: result.confidence ?? null,
+			message_hash: messageHash,
+		})
+
+		return result
+	}
+
+	private getDestructiveApprovalKey(
+		intentClassification: UserIntentClassification | null,
+		toolUse: ToolUse,
+		targetPaths: string[],
+	): string | null {
+		if (intentClassification?.messageHash) return intentClassification.messageHash
+		if (targetPaths.length > 0) return `${toolUse.name}:${targetPaths.join(",")}`
+		return null
+	}
+
+	private getDestructiveIntentApproval(task: Task, key: string): boolean | undefined {
+		const approvals = ((task as any).destructiveIntentApprovals ??= new Map<string, boolean>()) as Map<
+			string,
+			boolean
+		>
+		return approvals.get(key)
+	}
+
+	private setDestructiveIntentApproval(task: Task, key: string, approved: boolean): void {
+		const approvals = ((task as any).destructiveIntentApprovals ??= new Map<string, boolean>()) as Map<
+			string,
+			boolean
+		>
+		approvals.set(key, approved)
+	}
+
+	private getDestructiveOperationInfo(toolUse: ToolUse): { isDestructive: boolean; summary?: string } {
+		if (toolUse.name !== "apply_patch") {
+			return { isDestructive: false }
+		}
+
+		const patch = (toolUse.params as any)?.patch ?? (toolUse.nativeArgs as any)?.patch
+		if (typeof patch !== "string" || patch.trim().length === 0) {
+			return { isDestructive: false }
+		}
+
+		const deletes: string[] = []
+		const moves: string[] = []
+		for (const rawLine of patch.split("\n")) {
+			const line = rawLine.trim()
+			if (line.startsWith("*** Delete File: ")) {
+				const filePath = line.substring("*** Delete File: ".length).trim()
+				if (filePath) deletes.push(filePath)
+			}
+			if (line.startsWith("*** Move to: ")) {
+				const movePath = line.substring("*** Move to: ".length).trim()
+				if (movePath) moves.push(movePath)
+			}
+		}
+
+		if (deletes.length === 0 && moves.length === 0) {
+			return { isDestructive: false }
+		}
+
+		const parts: string[] = []
+		if (deletes.length > 0) {
+			parts.push(`delete ${deletes.join(", ")}`)
+		}
+		if (moves.length > 0) {
+			parts.push(`move ${moves.join(", ")}`)
+		}
+
+		return { isDestructive: true, summary: parts.join("; ") }
+	}
+
+	private buildDestructiveSummary(
+		toolUse: ToolUse,
+		opInfo: { isDestructive: boolean; summary?: string },
+		targetPaths: string[],
+	): string {
+		if (opInfo.summary) return opInfo.summary
+		if (targetPaths.length > 0) return `${toolUse.name} on ${targetPaths.join(", ")}`
+		return toolUse.name
+	}
+
 	private markCommandApproved(task: Task, command: string): void {
 		const approvals = ((task as any).approvedCommands ??= new Set<string>()) as Set<string>
 		approvals.add(command)
@@ -376,6 +619,7 @@ export class ScopeEnforcementHook implements PreToolHook {
 			targets?: string[]
 			command?: string
 			command_classification?: CommandSafety
+			intent_classification?: UserIntentClassification
 		},
 	): void {
 		const decisions = ((task as any).intentDecisions ??= []) as Array<any>

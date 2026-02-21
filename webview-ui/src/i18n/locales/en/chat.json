@@ -232,6 +232,7 @@
 		"wantsToReadOutsideWorkspace": "Roo wants to read this file outside of the workspace",
 		"didRead": "Roo read this file",
 		"wantsToEdit": "Roo wants to edit this file",
+		"wantsToDelete": "Roo wants to delete this file",
 		"wantsToEditOutsideWorkspace": "Roo wants to edit this file outside of the workspace",
 		"wantsToEditProtected": "Roo wants to edit a protected configuration file",
 		"wantsToApplyBatchChanges": "Roo wants to apply changes to multiple files",
