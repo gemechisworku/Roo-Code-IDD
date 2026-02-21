@@ -15,7 +15,7 @@ import { unescapeHtmlEntities } from "../../utils/text-normalization"
 import { EXPERIMENT_IDS, experiments } from "../../shared/experiments"
 import { convertNewFileToUnifiedDiff, computeDiffStats, sanitizeUnifiedDiff } from "../diff/stats"
 import type { ToolUse } from "../../shared/tools"
-import { checkOptimisticLock } from "../../hooks/optimisticLock"
+import { buildStaleFileError, checkOptimisticLock } from "../../hooks/optimisticLock"
 
 import { BaseTool, ToolCallbacks } from "./BaseTool"
 
@@ -217,7 +217,31 @@ export class WriteToFileTool extends BaseTool<"write_to_file"> {
 					return
 				}
 
-				await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+				const saveResult = await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+				if (saveResult?.saveError) {
+					if (saveResult.saveError.kind === "stale") {
+						const err = buildStaleFileError(
+							task,
+							this.name,
+							relPath,
+							newContent,
+							saveResult.finalContent ?? null,
+							"File changed during save; refresh before retrying",
+						)
+						task.recordToolError("write_to_file", err)
+						task.didToolFailInCurrentTurn = true
+						pushToolResult(formatResponse.toolError(err))
+						await task.diffViewProvider.reset()
+						this.resetPartialState()
+						return
+					}
+					const errorMessage = `Failed to save '${relPath}': ${saveResult.saveError.message}`
+					await task.say("error", errorMessage)
+					pushToolResult(formatResponse.toolError(errorMessage))
+					await task.diffViewProvider.reset()
+					this.resetPartialState()
+					return
+				}
 			}
 
 			if (relPath) {

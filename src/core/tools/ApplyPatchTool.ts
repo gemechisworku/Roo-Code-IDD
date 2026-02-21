@@ -15,7 +15,7 @@ import { BaseTool, ToolCallbacks } from "./BaseTool"
 import type { ToolUse } from "../../shared/tools"
 import { parsePatch, ParseError, processAllHunks } from "./apply-patch"
 import type { ApplyPatchFileChange } from "./apply-patch"
-import { checkOptimisticLock, markStaleFile } from "../../hooks/optimisticLock"
+import { buildStaleFileError, checkOptimisticLock, markStaleFile } from "../../hooks/optimisticLock"
 import { hashContent } from "../../hooks/traceUtils"
 import { serializeHookError } from "../../hooks/hookErrors"
 import { appendWithLock } from "../../hooks/appendWithLock"
@@ -309,28 +309,73 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 			return
 		}
 
-		const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
-		if (staleAfterApproval) {
-			await this.logDiagnostics(task, {
-				event: "stale_post_approve_add",
-				tool_call_id: callbacks.toolCallId,
-				path: relPath,
-			})
-			task.recordToolError("apply_patch", staleAfterApproval)
-			task.didToolFailInCurrentTurn = true
-			pushToolResult(formatResponse.toolError(staleAfterApproval))
-			if (!isPreventFocusDisruptionEnabled) {
-				await task.diffViewProvider.revertChanges()
-			}
-			await task.diffViewProvider.reset()
-			return
-		}
+		await this.logDiagnostics(task, {
+			event: "stale_check_skipped_add",
+			tool_call_id: callbacks.toolCallId,
+			path: relPath,
+			reason: "add_flow_uses_pre_save_guard",
+		})
 
 		// Save the changes
+		if (isPreventFocusDisruptionEnabled) {
+			const existsBeforeSave = await fileExistsAtPath(absolutePath)
+			await this.logDiagnostics(task, {
+				event: "pre_save_exists_add",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+				exists: existsBeforeSave,
+			})
+			if (existsBeforeSave) {
+				const diskContent = await fs.readFile(absolutePath, "utf8").catch(() => null)
+				const err = buildStaleFileError(
+					task,
+					this.name,
+					relPath,
+					null,
+					diskContent,
+					"File appeared during approval; refresh before retrying",
+				)
+				task.recordToolError("apply_patch", err)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(err))
+				await task.diffViewProvider.reset()
+				return
+			}
+		}
+
 		if (isPreventFocusDisruptionEnabled) {
 			await task.diffViewProvider.saveDirectly(relPath, newContent, true, diagnosticsEnabled, writeDelayMs)
 		} else {
 			const saveResult = await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+			if (saveResult?.saveError) {
+				await this.logDiagnostics(task, {
+					event: "save_error_add",
+					tool_call_id: callbacks.toolCallId,
+					path: relPath,
+					error_kind: saveResult.saveError.kind,
+					error_message: saveResult.saveError.message,
+				})
+				if (saveResult.saveError.kind === "stale") {
+					const err = buildStaleFileError(
+						task,
+						this.name,
+						relPath,
+						newContent,
+						saveResult.finalContent ?? null,
+						"File changed during save; refresh before retrying",
+					)
+					task.recordToolError("apply_patch", err)
+					task.didToolFailInCurrentTurn = true
+					pushToolResult(formatResponse.toolError(err))
+					await task.diffViewProvider.reset()
+					return
+				}
+				const errorMessage = `Failed to save '${relPath}': ${saveResult.saveError.message}`
+				await task.say("error", errorMessage)
+				pushToolResult(formatResponse.toolError(errorMessage))
+				await task.diffViewProvider.reset()
+				return
+			}
 			await this.logDiagnostics(task, {
 				event: "save_result_add",
 				tool_call_id: callbacks.toolCallId,
@@ -762,6 +807,35 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 				await task.diffViewProvider.saveDirectly(relPath, newContent, false, diagnosticsEnabled, writeDelayMs)
 			} else {
 				const saveResult = await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+				if (saveResult?.saveError) {
+					await this.logDiagnostics(task, {
+						event: "save_error_update",
+						tool_call_id: callbacks.toolCallId,
+						path: relPath,
+						error_kind: saveResult.saveError.kind,
+						error_message: saveResult.saveError.message,
+					})
+					if (saveResult.saveError.kind === "stale") {
+						const err = buildStaleFileError(
+							task,
+							this.name,
+							relPath,
+							newContent,
+							saveResult.finalContent ?? null,
+							"File changed during save; refresh before retrying",
+						)
+						task.recordToolError("apply_patch", err)
+						task.didToolFailInCurrentTurn = true
+						pushToolResult(formatResponse.toolError(err))
+						await task.diffViewProvider.reset()
+						return
+					}
+					const errorMessage = `Failed to save '${relPath}': ${saveResult.saveError.message}`
+					await task.say("error", errorMessage)
+					pushToolResult(formatResponse.toolError(errorMessage))
+					await task.diffViewProvider.reset()
+					return
+				}
 				await this.logDiagnostics(task, {
 					event: "save_result_update",
 					tool_call_id: callbacks.toolCallId,

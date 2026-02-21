@@ -53,6 +53,43 @@ export function getStaleFileBlock(task: Task, relPath: string): StaleBlock | und
 	return store.get(key)
 }
 
+export function buildStaleFileError(
+	task: Task,
+	tool: string,
+	relPath: string,
+	expectedContent: string | null | undefined,
+	actualContent: string | null | undefined,
+	message: string,
+): string {
+	const expectedHash = expectedContent !== null && expectedContent !== undefined ? hashContent(expectedContent) : null
+	const actualHash = actualContent !== null && actualContent !== undefined ? hashContent(actualContent) : null
+
+	const err = serializeHookError(
+		{
+			error_type: "stale_file",
+			code: "REQ-007",
+			intent_id: (task as any).activeIntent?.id || "",
+			tool,
+			message,
+		},
+		{ path: relPath, expected_hash: expectedHash, actual_hash: actualHash },
+	)
+
+	;(task as any).lastVerificationFailure = {
+		type: "stale_file",
+		intent_id: (task as any).activeIntent?.id || "",
+		tool,
+		path: relPath,
+		expected_hash: expectedHash,
+		actual_hash: actualHash,
+		timestamp: new Date().toISOString(),
+	}
+
+	markStaleFile(task, relPath, tool)
+
+	return err
+}
+
 function getSnapshotEntry(snapshotMap: Map<string, SnapshotEntry>, relPath: string): SnapshotEntry | undefined {
 	const candidates = new Set<string>()
 	const raw = relPath || ""

@@ -200,6 +200,10 @@ export class DiffViewProvider {
 		newProblemsMessage: string | undefined
 		userEdits: string | undefined
 		finalContent: string | undefined
+		saveError?: {
+			kind: "stale" | "unknown"
+			message: string
+		}
 	}> {
 		if (!this.relPath || !this.newContent || !this.activeDiffEditor) {
 			return { newProblemsMessage: undefined, userEdits: undefined, finalContent: undefined }
@@ -210,7 +214,21 @@ export class DiffViewProvider {
 		const editedContent = updatedDocument.getText()
 
 		if (updatedDocument.isDirty) {
-			await updatedDocument.save()
+			try {
+				await updatedDocument.save()
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error)
+				const kind = /File Modified Since|content of the file is newer|modified since/i.test(message)
+					? "stale"
+					: "unknown"
+				const diskContent = await fs.readFile(absolutePath, "utf8").catch(() => undefined)
+				return {
+					newProblemsMessage: undefined,
+					userEdits: undefined,
+					finalContent: diskContent,
+					saveError: { kind, message },
+				}
+			}
 		}
 
 		await vscode.window.showTextDocument(vscode.Uri.file(absolutePath), { preview: false, preserveFocus: true })
