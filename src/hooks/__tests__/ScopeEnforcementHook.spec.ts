@@ -75,6 +75,50 @@ describe("ScopeEnforcementHook", () => {
 		expect(err.filename).toBe(path.join("other", "foo.ts"))
 	})
 
+	it("prompts for destructive in-scope delete operations", async () => {
+		showWarningMessageMock.mockResolvedValue({ title: "Reject" } as vscode.MessageItem)
+		const hook = new ScopeEnforcementHook()
+		const task = makeTask({
+			activeIntent: {
+				id: "i1",
+				context: `<intent_context><owned_scope><path>src</path></owned_scope></intent_context>`,
+			},
+			lastUserMessageText: "Delete src/foo.ts",
+		})
+		const toolUse: any = {
+			name: "apply_patch",
+			params: { patch: "*** Delete File: src/foo.ts\n*** End Patch" },
+		}
+
+		const res = await hook.execute(task, toolUse)
+		expect(res.shouldProceed).toBe(false)
+		const err = JSON.parse(res.errorMessage as string)
+		expect(err.error_type).toBe("destructive_operation_denied")
+		expect(err.code).toBe("REQ-008")
+	})
+
+	it("prompts for destructive user intent before safe tools", async () => {
+		showWarningMessageMock.mockResolvedValue({ title: "Reject" } as vscode.MessageItem)
+		const hook = new ScopeEnforcementHook()
+		const task = makeTask({
+			activeIntent: {
+				id: "i1",
+				context: `<intent_context><owned_scope><path>src</path></owned_scope></intent_context>`,
+			},
+			lastUserMessageText: "Delete src/foo.ts",
+		})
+		const toolUse: any = {
+			name: "read_file",
+			params: { path: "src/foo.ts" },
+		}
+
+		const res = await hook.execute(task, toolUse)
+		expect(res.shouldProceed).toBe(false)
+		const err = JSON.parse(res.errorMessage as string)
+		expect(err.error_type).toBe("destructive_intent_denied")
+		expect(err.code).toBe("REQ-009")
+	})
+
 	it("allows safe execute_command without approval", async () => {
 		const hook = new ScopeEnforcementHook()
 		const task = makeTask({

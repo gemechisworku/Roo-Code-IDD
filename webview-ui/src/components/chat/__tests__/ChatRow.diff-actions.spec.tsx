@@ -19,9 +19,11 @@ vi.mock("react-i18next", () => ({
 		t: (key: string) => {
 			const map: Record<string, string> = {
 				"chat:fileOperations.wantsToEdit": "Roo wants to edit this file",
+				"chat:fileOperations.wantsToDelete": "Roo wants to delete this file",
 				"chat:fileOperations.wantsToEditProtected": "Roo wants to edit a protected file",
 				"chat:fileOperations.wantsToEditOutsideWorkspace": "Roo wants to edit outside workspace",
 				"chat:fileOperations.wantsToApplyBatchChanges": "Roo wants to apply batch changes",
+				"chat:checkpoint.menu.cannotUndo": "This action cannot be undone.",
 			}
 			return map[key] || key
 		},
@@ -186,6 +188,20 @@ describe("ChatRow - inline diff stats and actions", () => {
 		const { container } = renderChatRow(protectedMessage)
 		expect(screen.getByText("Roo wants to edit a protected file")).toBeInTheDocument()
 		expect(container.querySelector(".codicon-lock")).toBeInTheDocument()
+	})
+
+	it("shows destructive warning for delete operations", () => {
+		const message = createToolAskMessage({
+			tool: "appliedDiff",
+			path: "src/file.ts",
+			diff: "File will be deleted: src/file.ts",
+			isDestructive: true,
+		})
+
+		renderChatRow(message)
+
+		expect(screen.getByText("Roo wants to delete this file")).toBeInTheDocument()
+		expect(screen.getByText("This action cannot be undone.")).toBeInTheDocument()
 	})
 
 	it("keeps batch diff handling for unified edit tools", () => {

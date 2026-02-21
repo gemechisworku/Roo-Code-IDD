@@ -471,6 +471,7 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 			path: getReadablePath(task.cwd, relPath),
 			diff: `File will be deleted: ${relPath}`,
 			isOutsideWorkspace,
+			isDestructive: true,
 		}
 
 		const completeMessage = JSON.stringify({
