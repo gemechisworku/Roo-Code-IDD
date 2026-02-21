@@ -4,6 +4,7 @@ import path from "path"
 import type { Task } from "../core/task/Task"
 import { serializeHookError } from "./hookErrors"
 import { hashContent, isBinaryBuffer } from "./traceUtils"
+import { toPosixPath } from "../utils/path"
 
 type SnapshotEntry = {
 	before: string | null
@@ -12,6 +13,64 @@ type SnapshotEntry = {
 }
 
 type SnapshotStore = Map<string, Map<string, SnapshotEntry>>
+
+type StaleBlock = {
+	timestamp: string
+	tool: string
+}
+
+type StaleBlockStore = Map<string, StaleBlock>
+
+function getStaleBlockStore(task: Task): StaleBlockStore {
+	const anyTask = task as any
+	if (!anyTask.staleFileBlocks) {
+		anyTask.staleFileBlocks = new Map()
+	}
+	return anyTask.staleFileBlocks as StaleBlockStore
+}
+
+function normalizeStaleKey(relPath: string): string {
+	const raw = relPath || ""
+	const trimmed = raw.replace(/^[.][\\/]/, "")
+	return toPosixPath(trimmed)
+}
+
+export function markStaleFile(task: Task, relPath: string, tool: string): void {
+	const store = getStaleBlockStore(task)
+	const key = normalizeStaleKey(relPath)
+	store.set(key, { timestamp: new Date().toISOString(), tool })
+}
+
+export function clearStaleFile(task: Task, relPath: string): void {
+	const store = getStaleBlockStore(task)
+	const key = normalizeStaleKey(relPath)
+	store.delete(key)
+}
+
+export function getStaleFileBlock(task: Task, relPath: string): StaleBlock | undefined {
+	const store = getStaleBlockStore(task)
+	const key = normalizeStaleKey(relPath)
+	return store.get(key)
+}
+
+function getSnapshotEntry(snapshotMap: Map<string, SnapshotEntry>, relPath: string): SnapshotEntry | undefined {
+	const candidates = new Set<string>()
+	const raw = relPath || ""
+
+	candidates.add(raw)
+	candidates.add(raw.replace(/^[.][\\/]/, ""))
+	candidates.add(toPosixPath(raw))
+	candidates.add(toPosixPath(raw.replace(/^[.][\\/]/, "")))
+	candidates.add(path.posix.normalize(toPosixPath(raw)))
+	candidates.add(path.posix.normalize(toPosixPath(raw.replace(/^[.][\\/]/, ""))))
+
+	for (const candidate of candidates) {
+		const entry = snapshotMap.get(candidate)
+		if (entry) return entry
+	}
+
+	return undefined
+}
 
 export async function checkOptimisticLock(
 	task: Task,
@@ -24,7 +83,7 @@ export async function checkOptimisticLock(
 	if (!store) return null
 	const snapshotMap = store.get(toolCallId)
 	if (!snapshotMap) return null
-	const snapshot = snapshotMap.get(relPath)
+	const snapshot = getSnapshotEntry(snapshotMap, relPath)
 	if (!snapshot) return null
 
 	if (snapshot.binary) return null
@@ -75,6 +134,7 @@ export async function checkOptimisticLock(
 		actual_hash: actualHash,
 		timestamp: new Date().toISOString(),
 	}
+	markStaleFile(task, relPath, tool)
 
 	return err
 }

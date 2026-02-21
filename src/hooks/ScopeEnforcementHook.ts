@@ -12,6 +12,8 @@ import { classifyCommandWithDebug, type CommandSafety } from "./CommandClassifie
 import { serializeHookError } from "./hookErrors"
 import { unescapeHtmlEntities } from "../utils/text-normalization"
 import { extractTargetPaths } from "./traceUtils"
+import { getStaleFileBlock, clearStaleFile } from "./optimisticLock"
+import { appendWithLock } from "./appendWithLock"
 
 /**
  * Scope Enforcement Hook
@@ -65,6 +67,42 @@ export class ScopeEnforcementHook implements PreToolHook {
 
 		// Metadata enforcement for mutating tools
 		if (isMutatingTool(toolUse.name)) {
+			const targetPaths = this.extractPathsFromToolUse(toolUse)
+			const blocked = targetPaths.filter((p) => getStaleFileBlock(task, p))
+			if (blocked.length > 0) {
+				const diagEntry = {
+					ts: new Date().toISOString(),
+					hook: this.name,
+					event: "stale_lock",
+					tool: toolUse.name,
+					path: blocked[0],
+				}
+				console.log("[agent-diagnostics][stale-lock]", diagEntry)
+				try {
+					const diagPath = path.resolve(task.cwd, ".orchestration", "agent-diagnostics.jsonl")
+					await appendWithLock(diagPath, JSON.stringify(diagEntry) + "\n")
+				} catch {
+					// best-effort only
+				}
+
+				const approved = await this.promptApproval(
+					`The file '${blocked[0]}' changed since the last attempt. Approve overriding the stale lock and proceed?`,
+				)
+				if (!approved) {
+					;(task as any).didRejectTool = true
+					const err = {
+						error_type: "stale_lock",
+						code: "REQ-007",
+						intent_id: activeIntent.id,
+						tool: toolUse.name,
+						message: "Stale file lock active; read file and retry or explicitly approve override",
+					}
+					return { shouldProceed: false, errorMessage: serializeHookError(err, { path: blocked[0] }) }
+				}
+
+				blocked.forEach((p) => clearStaleFile(task, p))
+			}
+
 			const metadata = this.getMutationMetadata(toolUse)
 			const autoIntentId = metadata.intent_id ?? activeIntent.id
 			const autoMutationClass = metadata.mutation_class ?? "INTENT_EVOLUTION"

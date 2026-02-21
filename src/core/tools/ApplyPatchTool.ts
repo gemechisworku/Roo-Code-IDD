@@ -3,7 +3,7 @@ import path from "path"
 
 import { type ClineSayTool, DEFAULT_WRITE_DELAY_MS } from "@roo-code/types"
 
-import { getReadablePath } from "../../utils/path"
+import { getReadablePath, toPosixPath } from "../../utils/path"
 import { isPathOutsideWorkspace } from "../../utils/pathUtils"
 import { Task } from "../task/Task"
 import { formatResponse } from "../prompts/responses"
@@ -15,7 +15,10 @@ import { BaseTool, ToolCallbacks } from "./BaseTool"
 import type { ToolUse } from "../../shared/tools"
 import { parsePatch, ParseError, processAllHunks } from "./apply-patch"
 import type { ApplyPatchFileChange } from "./apply-patch"
-import { checkOptimisticLock } from "../../hooks/optimisticLock"
+import { checkOptimisticLock, markStaleFile } from "../../hooks/optimisticLock"
+import { hashContent } from "../../hooks/traceUtils"
+import { serializeHookError } from "../../hooks/hookErrors"
+import { appendWithLock } from "../../hooks/appendWithLock"
 
 interface ApplyPatchParams {
 	patch: string
@@ -25,6 +28,47 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 	readonly name = "apply_patch" as const
 
 	private static readonly FILE_HEADER_MARKERS = ["*** Add File: ", "*** Delete File: ", "*** Update File: "] as const
+	private static readonly DIAGNOSTICS_FILE = path.join(".orchestration", "agent-diagnostics.jsonl")
+
+	private async logDiagnostics(task: Task, payload: Record<string, unknown>): Promise<void> {
+		const entry = {
+			ts: new Date().toISOString(),
+			tool: this.name,
+			...payload,
+		}
+		console.log("[agent-diagnostics][apply_patch]", entry)
+		try {
+			const diagPath = path.resolve(task.cwd, ApplyPatchTool.DIAGNOSTICS_FILE)
+			await appendWithLock(diagPath, JSON.stringify(entry) + "\n")
+		} catch (error) {
+			console.warn("[agent-diagnostics][apply_patch] failed to append", error)
+		}
+	}
+
+	private getSnapshotStatus(task: Task, toolCallId: string | undefined, relPath: string) {
+		const store = (task as any).traceSnapshots as Map<string, Map<string, any>> | undefined
+		if (!store) return { status: "no_store" }
+		if (!toolCallId) return { status: "no_tool_call_id" }
+		const snapshotMap = store.get(toolCallId)
+		if (!snapshotMap) return { status: "no_tool_entry" }
+
+		const candidates = new Set<string>()
+		const raw = relPath || ""
+		candidates.add(raw)
+		candidates.add(raw.replace(/^[.][\\/]/, ""))
+		candidates.add(toPosixPath(raw))
+		candidates.add(toPosixPath(raw.replace(/^[.][\\/]/, "")))
+		candidates.add(path.posix.normalize(toPosixPath(raw)))
+		candidates.add(path.posix.normalize(toPosixPath(raw.replace(/^[.][\\/]/, ""))))
+
+		for (const candidate of candidates) {
+			if (snapshotMap.has(candidate)) {
+				return { status: "found", key: candidate }
+			}
+		}
+
+		return { status: "missing", keys: Array.from(snapshotMap.keys()).slice(0, 5) }
+	}
 
 	private extractFirstPathFromPatch(patch: string | undefined): string | undefined {
 		if (!patch) {
@@ -86,6 +130,12 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 				return
 			}
 
+			await this.logDiagnostics(task, {
+				event: "parsed_patch",
+				tool_call_id: callbacks.toolCallId,
+				hunk_count: parsedPatch.hunks.length,
+			})
+
 			// Process each hunk
 			const readFile = async (filePath: string): Promise<string> => {
 				const absolutePath = path.resolve(task.cwd, filePath)
@@ -103,6 +153,18 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 				return
 			}
 
+			await this.logDiagnostics(task, {
+				event: "processed_hunks",
+				change_count: changes.length,
+				changes: changes.map((change) => ({
+					type: change.type,
+					path: change.path,
+					movePath: change.movePath,
+					original_hash: change.originalContent ? hashContent(change.originalContent) : null,
+					new_hash: change.newContent ? hashContent(change.newContent) : null,
+				})),
+			})
+
 			// Process each file change
 			for (const change of changes) {
 				const relPath = change.path
@@ -119,12 +181,27 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 				// Check if file is write-protected
 				const isWriteProtected = task.rooProtectedController?.isWriteProtected(relPath) || false
 
+				await this.logDiagnostics(task, {
+					event: "change_start",
+					tool_call_id: callbacks.toolCallId,
+					change_type: change.type,
+					path: relPath,
+					snapshot: this.getSnapshotStatus(task, callbacks.toolCallId, relPath),
+				})
+
 				if (change.type === "add") {
 					// Create new file
 					await this.handleAddFile(change, absolutePath, relPath, task, callbacks, isWriteProtected)
 				} else if (change.type === "delete") {
 					// Delete file
-					await this.handleDeleteFile(absolutePath, relPath, task, callbacks, isWriteProtected)
+					await this.handleDeleteFile(
+						absolutePath,
+						relPath,
+						task,
+						callbacks,
+						isWriteProtected,
+						change.originalContent,
+					)
 				} else if (change.type === "update") {
 					// Update file
 					await this.handleUpdateFile(change, absolutePath, relPath, task, callbacks, isWriteProtected)
@@ -151,6 +228,11 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 
 		const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
 		if (staleError) {
+			await this.logDiagnostics(task, {
+				event: "stale_pre_add",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+			})
 			task.recordToolError("apply_patch", staleError)
 			task.didToolFailInCurrentTurn = true
 			pushToolResult(formatResponse.toolError(staleError))
@@ -214,6 +296,11 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 		const didApprove = await askApproval("tool", completeMessage, undefined, isWriteProtected)
 
 		if (!didApprove) {
+			await this.logDiagnostics(task, {
+				event: "rejected_add",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+			})
 			if (!isPreventFocusDisruptionEnabled) {
 				await task.diffViewProvider.revertChanges()
 			}
@@ -224,6 +311,11 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 
 		const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
 		if (staleAfterApproval) {
+			await this.logDiagnostics(task, {
+				event: "stale_post_approve_add",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+			})
 			task.recordToolError("apply_patch", staleAfterApproval)
 			task.didToolFailInCurrentTurn = true
 			pushToolResult(formatResponse.toolError(staleAfterApproval))
@@ -238,7 +330,49 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 		if (isPreventFocusDisruptionEnabled) {
 			await task.diffViewProvider.saveDirectly(relPath, newContent, true, diagnosticsEnabled, writeDelayMs)
 		} else {
-			await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+			const saveResult = await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+			await this.logDiagnostics(task, {
+				event: "save_result_add",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+				user_edits: Boolean(saveResult?.userEdits),
+			})
+			if (saveResult?.userEdits) {
+				await this.logDiagnostics(task, {
+					event: "user_edits_detected_add",
+					tool_call_id: callbacks.toolCallId,
+					path: relPath,
+					expected_hash: hashContent(newContent),
+					actual_hash: hashContent(saveResult.finalContent || ""),
+				})
+				const expectedHash = hashContent(newContent)
+				const actualHash = hashContent(saveResult.finalContent || "")
+				const err = serializeHookError(
+					{
+						error_type: "stale_file",
+						code: "REQ-007",
+						intent_id: (task as any).activeIntent?.id || "",
+						tool: this.name,
+						message: "User modified the file before approval; refresh before retrying",
+					},
+					{ path: relPath, expected_hash: expectedHash, actual_hash: actualHash },
+				)
+				;(task as any).lastVerificationFailure = {
+					type: "stale_file",
+					intent_id: (task as any).activeIntent?.id || "",
+					tool: this.name,
+					path: relPath,
+					expected_hash: expectedHash,
+					actual_hash: actualHash,
+					timestamp: new Date().toISOString(),
+				}
+				markStaleFile(task, relPath, this.name)
+				task.recordToolError("apply_patch", err)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(err))
+				await task.diffViewProvider.reset()
+				return
+			}
 		}
 
 		// Track file edit operation
@@ -257,11 +391,17 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 		task: Task,
 		callbacks: ToolCallbacks,
 		isWriteProtected: boolean,
+		originalContent?: string,
 	): Promise<void> {
 		const { askApproval, pushToolResult } = callbacks
 
 		const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
 		if (staleError) {
+			await this.logDiagnostics(task, {
+				event: "stale_pre_delete",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+			})
 			task.recordToolError("apply_patch", staleError)
 			task.didToolFailInCurrentTurn = true
 			pushToolResult(formatResponse.toolError(staleError))
@@ -297,16 +437,65 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 		const didApprove = await askApproval("tool", completeMessage, undefined, isWriteProtected)
 
 		if (!didApprove) {
+			await this.logDiagnostics(task, {
+				event: "rejected_delete",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+			})
 			pushToolResult("Delete operation was rejected by the user.")
 			return
 		}
 
 		const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
 		if (staleAfterApproval) {
+			await this.logDiagnostics(task, {
+				event: "stale_post_approve_delete",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+			})
 			task.recordToolError("apply_patch", staleAfterApproval)
 			task.didToolFailInCurrentTurn = true
 			pushToolResult(formatResponse.toolError(staleAfterApproval))
 			return
+		}
+
+		if (originalContent !== undefined) {
+			const currentContent = await fs.readFile(absolutePath, "utf8").catch(() => null)
+			if (currentContent !== null && currentContent !== originalContent) {
+				await this.logDiagnostics(task, {
+					event: "stale_detected_delete",
+					tool_call_id: callbacks.toolCallId,
+					path: relPath,
+					expected_hash: hashContent(originalContent),
+					actual_hash: hashContent(currentContent),
+				})
+				const expectedHash = hashContent(originalContent)
+				const actualHash = hashContent(currentContent)
+				const err = serializeHookError(
+					{
+						error_type: "stale_file",
+						code: "REQ-007",
+						intent_id: (task as any).activeIntent?.id || "",
+						tool: this.name,
+						message: "File changed since tool started; refresh before retrying",
+					},
+					{ path: relPath, expected_hash: expectedHash, actual_hash: actualHash },
+				)
+				;(task as any).lastVerificationFailure = {
+					type: "stale_file",
+					intent_id: (task as any).activeIntent?.id || "",
+					tool: this.name,
+					path: relPath,
+					expected_hash: expectedHash,
+					actual_hash: actualHash,
+					timestamp: new Date().toISOString(),
+				}
+				markStaleFile(task, relPath, this.name)
+				task.recordToolError("apply_patch", err)
+				task.didToolFailInCurrentTurn = true
+				pushToolResult(formatResponse.toolError(err))
+				return
+			}
 		}
 
 		// Delete the file
@@ -336,6 +525,11 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 
 		const staleError = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
 		if (staleError) {
+			await this.logDiagnostics(task, {
+				event: "stale_pre_update",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+			})
 			task.recordToolError("apply_patch", staleError)
 			task.didToolFailInCurrentTurn = true
 			pushToolResult(formatResponse.toolError(staleError))
@@ -356,6 +550,12 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 		const originalContent = change.originalContent || ""
 		const newContent = change.newContent || ""
 		const isOutsideWorkspace = isPathOutsideWorkspace(absolutePath)
+
+		if (newContent === originalContent) {
+			pushToolResult(`No changes needed for '${relPath}'`)
+			await task.diffViewProvider.reset()
+			return
+		}
 
 		// Initialize diff view
 		task.diffViewProvider.editType = "modify"
@@ -406,6 +606,11 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 		const didApprove = await askApproval("tool", completeMessage, undefined, isWriteProtected)
 
 		if (!didApprove) {
+			await this.logDiagnostics(task, {
+				event: "rejected_update",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+			})
 			if (!isPreventFocusDisruptionEnabled) {
 				await task.diffViewProvider.revertChanges()
 			}
@@ -416,9 +621,64 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 
 		const staleAfterApproval = await checkOptimisticLock(task, callbacks.toolCallId, relPath, this.name)
 		if (staleAfterApproval) {
+			await this.logDiagnostics(task, {
+				event: "stale_post_approve_update",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+			})
 			task.recordToolError("apply_patch", staleAfterApproval)
 			task.didToolFailInCurrentTurn = true
 			pushToolResult(formatResponse.toolError(staleAfterApproval))
+			if (!isPreventFocusDisruptionEnabled) {
+				await task.diffViewProvider.revertChanges()
+			}
+			await task.diffViewProvider.reset()
+			return
+		}
+
+		const currentContent = await fs.readFile(absolutePath, "utf8").catch(() => null)
+		await this.logDiagnostics(task, {
+			event: "current_content_check_update",
+			tool_call_id: callbacks.toolCallId,
+			path: relPath,
+			current_exists: currentContent !== null,
+			current_hash: currentContent !== null ? hashContent(currentContent) : null,
+			original_hash: hashContent(originalContent),
+			match: currentContent !== null ? currentContent === originalContent : null,
+		})
+		if (currentContent !== null && currentContent !== originalContent) {
+			await this.logDiagnostics(task, {
+				event: "stale_detected_update",
+				tool_call_id: callbacks.toolCallId,
+				path: relPath,
+				expected_hash: hashContent(originalContent),
+				actual_hash: hashContent(currentContent),
+			})
+			const expectedHash = hashContent(originalContent)
+			const actualHash = hashContent(currentContent)
+			const err = serializeHookError(
+				{
+					error_type: "stale_file",
+					code: "REQ-007",
+					intent_id: (task as any).activeIntent?.id || "",
+					tool: this.name,
+					message: "File changed since tool started; refresh before retrying",
+				},
+				{ path: relPath, expected_hash: expectedHash, actual_hash: actualHash },
+			)
+			;(task as any).lastVerificationFailure = {
+				type: "stale_file",
+				intent_id: (task as any).activeIntent?.id || "",
+				tool: this.name,
+				path: relPath,
+				expected_hash: expectedHash,
+				actual_hash: actualHash,
+				timestamp: new Date().toISOString(),
+			}
+			markStaleFile(task, relPath, this.name)
+			task.recordToolError("apply_patch", err)
+			task.didToolFailInCurrentTurn = true
+			pushToolResult(formatResponse.toolError(err))
 			if (!isPreventFocusDisruptionEnabled) {
 				await task.diffViewProvider.revertChanges()
 			}
@@ -501,7 +761,49 @@ export class ApplyPatchTool extends BaseTool<"apply_patch"> {
 			if (isPreventFocusDisruptionEnabled) {
 				await task.diffViewProvider.saveDirectly(relPath, newContent, false, diagnosticsEnabled, writeDelayMs)
 			} else {
-				await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+				const saveResult = await task.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
+				await this.logDiagnostics(task, {
+					event: "save_result_update",
+					tool_call_id: callbacks.toolCallId,
+					path: relPath,
+					user_edits: Boolean(saveResult?.userEdits),
+				})
+				if (saveResult?.userEdits) {
+					await this.logDiagnostics(task, {
+						event: "user_edits_detected_update",
+						tool_call_id: callbacks.toolCallId,
+						path: relPath,
+						expected_hash: hashContent(newContent),
+						actual_hash: hashContent(saveResult.finalContent || ""),
+					})
+					const expectedHash = hashContent(newContent)
+					const actualHash = hashContent(saveResult.finalContent || "")
+					const err = serializeHookError(
+						{
+							error_type: "stale_file",
+							code: "REQ-007",
+							intent_id: (task as any).activeIntent?.id || "",
+							tool: this.name,
+							message: "User modified the file before approval; refresh before retrying",
+						},
+						{ path: relPath, expected_hash: expectedHash, actual_hash: actualHash },
+					)
+					;(task as any).lastVerificationFailure = {
+						type: "stale_file",
+						intent_id: (task as any).activeIntent?.id || "",
+						tool: this.name,
+						path: relPath,
+						expected_hash: expectedHash,
+						actual_hash: actualHash,
+						timestamp: new Date().toISOString(),
+					}
+					markStaleFile(task, relPath, this.name)
+					task.recordToolError("apply_patch", err)
+					task.didToolFailInCurrentTurn = true
+					pushToolResult(formatResponse.toolError(err))
+					await task.diffViewProvider.reset()
+					return
+				}
 			}
 
 			await task.fileContextTracker.trackFileContext(relPath, "roo_edited" as RecordSource)
